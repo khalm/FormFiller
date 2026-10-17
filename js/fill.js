@@ -4,8 +4,9 @@
 // keeping only the form pages) is done with pdf-lib.
 import { openPdf, pdfjsLib, PDFLib } from './pdf.js';
 import { t } from './i18n.js';
+import { markLines } from './marks.js';
 
-const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull, TextAlignment } = PDFLib;
+const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull, TextAlignment, LineCapStyle } = PDFLib;
 const TEXTISH = new Set(['text', 'multiline', 'select']);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -147,14 +148,21 @@ export async function buildPdf(o) {
     const page = pdf.getPage(m.page);
     const vp = viewports[m.page];
     const r = m.rect;
-    if (m.kind === 'white') {
+    const P = (x, y) => { const [px, py] = vp.convertToPdfPoint(x, y); return { x: px, y: py }; };
+    if (m.kind === 'cover') {
       const [x1, y1, x2, y2] = toPdfRect(vp, r);
       const bg = /^#[0-9a-f]{6}$/i.test(m.color || '') ? [1, 3, 5].map((i) => parseInt(m.color.slice(i, i + 2), 16) / 255) : [1, 1, 1];
       page.drawRectangle({ x: x1, y: y1, width: x2 - x1, height: y2 - y1, color: rgb(...bg) });
+    } else if (m.kind === 'blur') {
+      if (!m.image) continue;
+      const img = await pdf.embedPng(m.image);
+      const [x1, y1, x2, y2] = toPdfRect(vp, r);
+      page.drawImage(img, { x: x1, y: y1, width: x2 - x1, height: y2 - y1 });
     } else {
-      const [ax, ay] = vp.convertToPdfPoint(r.x, r.y + r.h / 2);
-      const [bx, by] = vp.convertToPdfPoint(r.x + r.w, r.y + r.h / 2);
-      page.drawLine({ start: { x: ax, y: ay }, end: { x: bx, y: by }, thickness: Math.max(0.8, r.h * 0.08), color: o.color ? rgb(...o.color) : rgb(0.05, 0.05, 0.12) });
+      const geo = markLines(m.kind, r, m.seed);
+      if (!geo) continue;
+      const color = o.color ? rgb(...o.color) : rgb(0.05, 0.05, 0.12);
+      for (const [a, b, c, d] of geo.lines) page.drawLine({ start: P(a, b), end: P(c, d), thickness: geo.width, color, lineCap: LineCapStyle.Round });
     }
   }
   const helv = await pdf.embedFont(StandardFonts.Helvetica);

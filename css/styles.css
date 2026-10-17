@@ -434,9 +434,25 @@ dialog[open] { animation: pop .2s ease; }
 /* whiteout / strikeout */
 .mk { position: absolute; pointer-events: none; z-index: 1; }
 .mk.white { background: #fff; }
-.mk.strike::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: max(1.5px, calc(var(--k) * 1.1px)); transform: translateY(-50%); background: var(--ink-color, #0f1e52); }
+.mk.strike-old::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: max(1.5px, calc(var(--k) * 1.1px)); transform: translateY(-50%); background: var(--ink-color, #0f1e52); }
 .overlay.marking { cursor: crosshair; touch-action: none; }
 .overlay.marking .ov { pointer-events: none; opacity: .45; }
 .overlay.marking .mk { outline: 1px dashed rgba(224, 122, 0, .9); }
 .mk-draft { position: absolute; border: 1.5px dashed #e07a00; background: rgba(240, 140, 0, .12); pointer-events: none; z-index: 6; }
 .mark-hint { flex: 1; min-width: 150px; font-size: 13px; opacity: .85; }
+
+.mark-select select {
+  appearance: none; border: 0; border-radius: 10px; padding: 8px 34px 8px 12px; font-size: 14.5px; font-weight: 650;
+  background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237b808c' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 9px center / 16px;
+  color: var(--ink); cursor: pointer;
+}
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.mk svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.mk.blur { backdrop-filter: blur(calc(var(--k) * var(--br, 3px))); -webkit-backdrop-filter: blur(calc(var(--k) * var(--br, 3px))); }
+
+.cover-colors { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cc-chip { border: 1.5px solid color-mix(in srgb, var(--bg) 45%, transparent); background: transparent; color: inherit; border-radius: 99px; padding: 5px 10px; font-size: 13px; font-weight: 650; cursor: pointer; }
+.cc-sw { width: 28px; height: 28px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--bg) 40%, transparent); cursor: pointer; padding: 0; }
+.cc-chip.on, .cc-sw.on, .cc-pick.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+.cc-pick { position: relative; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; cursor: pointer; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); border: 2px solid color-mix(in srgb, var(--bg) 40%, transparent); }
+.cc-pick input { position: absolute; inset: -6px; width: 40px; height: 40px; opacity: 0; cursor: pointer; border: 0; padding: 0; }

@@ -3,6 +3,7 @@ import { t, getLang, setLang, applyStatic } from './i18n.js';
 import { openPdf, pdfjsLib } from './pdf.js';
 import { getSegments, readAcroFields, labelAcroFields, detectFlatFields, finishFlatFields, sortFields, wordBoxes } from './detect.js';
 import { buildPdf, hasValue, parseDateToIso, formatDate } from './fill.js';
+import { markLines, normalizeKind, MARK_STYLES } from './marks.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -137,8 +138,14 @@ function boot() {
   setupSignatureDialog();
   setupInk();
   $('#selBtn').addEventListener('click', () => setSelectMode(!S.selecting));
-  $('#markBtn').addEventListener('click', () => setMarkMode(S.marking ? null : 'white'));
-  $$('[data-mark]').forEach((b) => b.addEventListener('click', () => setMarkMode(b.dataset.mark)));
+  $('#markBtn').addEventListener('click', () => setMarkMode(!S.marking));
+  S.markStyle = normalizeKind(store.get('ff:markStyle', 'strike1'));
+  $('#markStyle').value = S.markStyle;
+  $('#markStyle').addEventListener('change', (e) => { S.markStyle = e.target.value; store.set('ff:markStyle', S.markStyle); maybeWarnErase(); updateCoverUi(); });
+  S.coverColor = store.get('ff:coverColor', 'auto');
+  $$('[data-cover]').forEach((b) => b.addEventListener('click', () => setCoverColor(b.dataset.cover)));
+  $('#coverCustom').addEventListener('input', (e) => setCoverColor(e.target.value));
+  updateCoverUi();
   $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); });
   $('#markDone').addEventListener('click', () => setMarkMode(null));
   $('#selCancel').addEventListener('click', () => setSelectMode(false));
@@ -832,28 +839,31 @@ function toggleKeyboard(f) {
   updateEditBar();
 }
 
-// ------------------------------------------------------------------ whiteout / strike-out
+// ------------------------------------------------------------------ erase (strike out, scribble, hatch, blur, cover)
 const normRect = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
-let warnedWhiteout = false;
-function setMarkMode(kind) {
-  S.marking = kind;
-  if (kind) {
+let warnedErase = false;
+function maybeWarnErase() {
+  if (!warnedErase && ['cover', 'blur', 'scribble', 'hatch'].includes(S.markStyle)) { warnedErase = true; toast(t('whiteoutNote'), '', 6500); }
+}
+function setMarkMode(on) {
+  S.marking = !!on;
+  if (on) {
     closeEditor(); document.activeElement?.blur(); setAddMode(null);
     if (S.selecting) setSelectMode(false);
     $('#inkPop').hidden = true;
-    if (kind === 'white' && !warnedWhiteout) { warnedWhiteout = true; toast(t('whiteoutNote'), '', 6500); }
+    maybeWarnErase();
   }
-  $('#markMode').hidden = !kind;
-  $('#markBtn').classList.toggle('on', !!kind);
-  $$('[data-mark]').forEach((b) => b.classList.toggle('active', b.dataset.mark === kind));
-  $$('.overlay').forEach((o) => o.classList.toggle('marking', !!kind));
+  $('#markMode').hidden = !on;
+  $('#markBtn').classList.toggle('on', !!on);
+  $$('.overlay').forEach((o) => o.classList.toggle('marking', !!on));
 }
 function textLinesIn(page, r) {
   return (S.segsByPage[page] || []).filter((s) => s.kind === 'text' && s.x2 > r.x && s.x1 < r.x + r.w && s.y2 > r.y && s.y1 < r.y + r.h);
 }
 function markTap(page, p) {
   // tapping an existing mark removes it
-  const hit = S.marks.findIndex((m) => m.page === page && p.x >= m.rect.x - 2 && p.x <= m.rect.x + m.rect.w + 2 && p.y >= m.rect.y - 2 && p.y <= m.rect.y + m.rect.h + 2);
+  let hit = -1;
+  S.marks.forEach((m, i) => { if (m.page === page && p.x >= m.rect.x - 2 && p.x <= m.rect.x + m.rect.w + 2 && p.y >= m.rect.y - 2 && p.y <= m.rect.y + m.rect.h + 2) hit = i; });
   if (hit >= 0) { S.marks.splice(hit, 1); renderMarks(); scheduleDraft(); return; }
   const seg = (S.segsByPage[page] || []).find((s) => s.kind === 'text' && p.x >= s.x1 - 2 && p.x <= s.x2 + 2 && p.y >= s.y1 - 2 && p.y <= s.y2 + 2);
   if (!seg) { toast(t('markHint')); return; }
@@ -862,7 +872,8 @@ function markTap(page, p) {
   addMark(page, { x: w.x1, y: w.y1, w: w.x2 - w.x1, h: w.y2 - w.y1 });
 }
 function markArea(page, r) {
-  if (S.marking === 'strike') {
+  // line styles follow the text lines inside the dragged area
+  if (S.markStyle.startsWith('strike')) {
     const lines = textLinesIn(page, r);
     if (lines.length) {
       for (const s of lines) {
@@ -873,13 +884,36 @@ function markArea(page, r) {
       return;
     }
   }
-  addMark(page, r);
+  // other styles: grow the area so any words it touches are fully covered
+  const lines = textLinesIn(page, r).filter((s) => Math.min(s.y2, r.y + r.h) - Math.max(s.y1, r.y) > (s.y2 - s.y1) * 0.2);
+  let x1 = r.x, y1 = r.y, x2 = r.x + r.w, y2 = r.y + r.h;
+  for (const s of lines) {
+    for (const wb of wordBoxes(s)) {
+      if (wb.x2 < r.x || wb.x1 > r.x + r.w) continue;
+      x1 = Math.min(x1, wb.x1); x2 = Math.max(x2, wb.x2); y1 = Math.min(y1, s.y1); y2 = Math.max(y2, s.y2);
+    }
+  }
+  addMark(page, { x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
+}
+function setCoverColor(c) {
+  S.coverColor = c;
+  store.set('ff:coverColor', c);
+  updateCoverUi();
+}
+function updateCoverUi() {
+  $('#coverColors').hidden = S.markStyle !== 'cover';
+  const preset = $$('[data-cover]').some((b) => b.dataset.cover === S.coverColor);
+  $$('[data-cover]').forEach((b) => b.classList.toggle('on', b.dataset.cover === S.coverColor));
+  $('.cc-pick').classList.toggle('on', !preset);
+  if (!preset && /^#/.test(S.coverColor)) { $('#coverCustom').value = S.coverColor; $('.cc-pick').style.background = S.coverColor; }
+  else $('.cc-pick').style.background = '';
 }
 function addMark(page, rect, quiet) {
-  const pad = S.marking === 'white' ? 1 : 0;
+  const kind = S.markStyle;
+  const pad = kind === 'cover' || kind === 'blur' ? 1 : 0;
   const r = { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
-  const mark = { kind: S.marking, page, rect: r };
-  if (S.marking === 'white') mark.color = backgroundAround(page, r);
+  const mark = { kind, page, rect: r, seed: Math.floor(Math.random() * 1e6) + 1 };
+  if (kind === 'cover') mark.color = S.coverColor && S.coverColor !== 'auto' ? S.coverColor : backgroundAround(page, r);
   S.marks.push(mark);
   if (!quiet) { renderMarks(); scheduleDraft(); }
 }
@@ -914,14 +948,60 @@ function backgroundAround(page, r) {
 }
 function renderMarks() {
   $$('.mk').forEach((n) => n.remove());
+  const NS = 'http://www.w3.org/2000/svg';
   for (const m of S.marks) {
+    m.kind = normalizeKind(m.kind);
     const pe = S.pageEls[m.page];
     if (!pe) continue;
+    const r = m.rect;
     const node = el('div', { class: 'mk ' + m.kind });
-    if (m.kind === 'white') node.style.background = m.color || '#fff';
-    place(node, m.rect, S.pages[m.page].viewport);
+    place(node, r, S.pages[m.page].viewport);
+    if (m.kind === 'cover') node.style.background = m.color || '#fff';
+    else if (m.kind === 'blur') node.style.setProperty('--br', Math.max(1.5, Math.min(r.h, r.w) * 0.22) + 'px');
+    else {
+      const geo = markLines(m.kind, r, m.seed);
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', `${r.x} ${r.y} ${r.w} ${r.h}`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', geo.lines.map(([a, b, c, d]) => `M${a} ${b}L${c} ${d}`).join(''));
+      Object.entries({ fill: 'none', stroke: 'var(--ink-color, #0f1e52)', 'stroke-width': geo.width, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }).forEach(([k, v]) => path.setAttribute(k, v));
+      svg.append(path);
+      node.append(svg);
+    }
     pe.overlay.prepend(node);
   }
+}
+
+// Blur can't be expressed as vector drawing, so the area is rendered, blurred and saved as a picture.
+async function blurImages(marks) {
+  const out = new Map();
+  for (const m of marks) {
+    if (m.kind !== 'blur') continue;
+    const pg = S.pages[m.page];
+    const r = m.rect;
+    const scale = Math.min(4, Math.max(2, 600 / Math.max(r.w, 1)));
+    const radius = Math.max(1.5, Math.min(r.h, r.w) * 0.22) * scale;
+    const margin = Math.ceil(radius * 3);
+    const vp = pg.page.getViewport({ scale });
+    const W = Math.ceil(r.w * scale), H = Math.ceil(r.h * scale);
+    const src = document.createElement('canvas');
+    src.width = W + margin * 2; src.height = H + margin * 2;
+    const sctx = src.getContext('2d');
+    sctx.fillStyle = '#fff'; sctx.fillRect(0, 0, src.width, src.height);
+    const tf = [1, 0, 0, 1, -(r.x * scale - margin), -(r.y * scale - margin)];
+    await pg.page.render({ canvasContext: sctx, canvas: src, viewport: vp, transform: tf, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise;
+    const blurred = document.createElement('canvas');
+    blurred.width = src.width; blurred.height = src.height;
+    const bctx = blurred.getContext('2d');
+    bctx.filter = `blur(${radius}px)`;
+    bctx.drawImage(src, 0, 0);
+    const fin = document.createElement('canvas');
+    fin.width = W; fin.height = H;
+    fin.getContext('2d').drawImage(blurred, margin, margin, W, H, 0, 0, W, H);
+    out.set(m, fin.toDataURL('image/png'));
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------ select & merge boxes
@@ -1328,7 +1408,7 @@ function rememberAnswers() {
 
 // ------------------------------------------------------------------ build / preview / save
 const formPages = () => new Set(S.fields.flatMap((f) => (f.widgets.length ? f.widgets.map((w) => w.page) : [f.page])));
-function build(mode = 'all', flatten = false) {
+async function build(mode = 'all', flatten = false) {
   // merged boxes are turned back into plain fields for the PDF writer
   const fields = [], values = {}, detach = [];
   for (const f of S.fields) {
@@ -1343,7 +1423,9 @@ function build(mode = 'all', flatten = false) {
       for (const p of f.parts) if (p.source === 'acro' && v) detach.push(p.name);
     }
   }
-  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields, values, detach, marks: S.marks, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
+  const blurs = S.encrypted ? new Map() : await blurImages(S.marks);
+  const marks = S.marks.map((m) => ({ ...m, kind: normalizeKind(m.kind), image: blurs.get(m) || null }));
+  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields, values, detach, marks, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
 }
 
 async function preview() {

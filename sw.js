@@ -5,7 +5,7 @@ const VERSION = new URL(location.href).searchParams.get('v') || 'dev';
 const CACHE = 'formfiller-' + VERSION;
 const SHELL = [
   './', 'index.html', 'css/styles.css', 'manifest.webmanifest',
-  'js/app.js', 'js/i18n.js', 'js/pdf.js', 'js/detect.js', 'js/fill.js', 'js/version.js',
+  'js/app.js', 'js/i18n.js', 'js/pdf.js', 'js/detect.js', 'js/fill.js', 'js/marks.js', 'js/version.js',
   'vendor/pdf-lib.esm.min.js', 'vendor/pdfjs/pdf.min.mjs', 'vendor/pdfjs/pdf.worker.min.mjs',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
