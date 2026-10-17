@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>FormFiller — fill PDF forms the easy way</title>
   <meta name="description" content="Free PDF form filler. Upload a PDF, fill in a clean, simple form, and save the filled-in PDF. Everything happens on your device.">
   <meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)">
@@ -67,52 +67,53 @@
         <div class="progress"><div id="progressBar"></div></div>
       </div>
       <button class="btn ghost small" id="newBtn" data-i18n="startOver"></button>
+      <button class="btn primary small" id="saveBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M12 4v11m-5-5l5 5 5-5M5 20h14"/></svg><span data-i18n="savePdf"></span></button>
     </div>
-
+    <div id="notices" class="notices"></div>
     <div class="tabs" role="tablist">
-      <button role="tab" class="tab active" data-tab="form" data-i18n="tabForm"></button>
-      <button role="tab" class="tab" data-tab="pages" data-i18n="tabPages"></button>
+      <button role="tab" class="tab active" data-tab="pdf"><svg viewBox="0 0 24 24" class="ico"><path d="M7 3h7l5 5v12a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span data-i18n="tabPdf"></span></button>
+      <button role="tab" class="tab" data-tab="list"><svg viewBox="0 0 24 24" class="ico"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg><span data-i18n="tabList"></span></button>
     </div>
 
-    <div class="workspace">
-      <section class="form-col" id="formCol">
-        <div id="notices"></div>
-        <form id="theForm" autocomplete="on" novalidate></form>
-        <div class="form-end">
-          <button class="btn ghost" id="scanMoreBtn" type="button" data-i18n="scanMore"></button>
+    <section class="pdf-view" id="pdfView">
+      <div class="stage" id="stage">
+        <div id="pagesBox" class="pages-box"></div>
+      </div>
+      <div class="stage-tools">
+        <button class="tool" id="zoomOut" data-i18n-aria="zoomOut"><svg viewBox="0 0 24 24"><path d="M6 12h12"/></svg></button>
+        <button class="tool zoom-label" id="zoomLabel" data-i18n-aria="zoomFit">100%</button>
+        <button class="tool" id="zoomIn" data-i18n-aria="zoomIn"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
+        <span class="tool-sep"></span>
+        <button class="tool" id="addBtn" data-i18n-aria="addField"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M12 10v4M10 12h4"/></svg></button>
+      </div>
+      <div class="add-mode" id="addMode" hidden>
+        <span data-i18n="addHint"></span>
+        <div class="seg-group">
+          <button class="seg active" data-add="text" data-i18n="addText"></button>
+          <button class="seg" data-add="checkbox" data-i18n="addCheck"></button>
         </div>
-      </section>
+        <button class="btn ghost small" id="addDone" data-i18n="cancel"></button>
+      </div>
 
-      <aside class="pages-col" id="pagesCol">
-        <div class="pages-toolbar">
-          <div class="pager">
-            <button class="icon-btn" id="prevPage" aria-label="Previous page"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
-            <span id="pageLabel"></span>
-            <button class="icon-btn" id="nextPage" aria-label="Next page"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      <div class="editbar" id="editbar">
+        <button class="nav-btn" id="prevBtn" data-i18n-aria="prevField"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="eb-center">
+          <div class="eb-top">
+            <span class="eb-label" id="ebLabel"></span>
+            <span class="eb-count" id="ebCount"></span>
           </div>
-          <div class="add-tools">
-            <button class="btn ghost small" id="addBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M12 5v14M5 12h14"/></svg><span data-i18n="addField"></span></button>
-            <div class="add-mode" id="addMode" hidden>
-              <button class="seg active" data-add="text" data-i18n="addText"></button>
-              <button class="seg" data-add="checkbox" data-i18n="addCheck"></button>
-              <button class="btn primary small" id="addDone" data-i18n="done"></button>
-            </div>
-          </div>
+          <div class="eb-slot" id="ebSlot"></div>
         </div>
-        <p class="pages-hint" id="pagesHint" data-i18n="pagesTitle"></p>
-        <div class="page-stage" id="pageStage">
-          <div class="page-wrap" id="pageWrap">
-            <canvas id="pageCanvas"></canvas>
-            <div class="overlay" id="overlay"></div>
-          </div>
-        </div>
-      </aside>
-    </div>
+        <button class="nav-btn next" id="nextBtn" data-i18n-aria="nextField"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+      </div>
+    </section>
 
-    <div class="actionbar">
-      <button class="btn secondary" id="previewBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span data-i18n="preview"></span></button>
-      <button class="btn primary" id="saveBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M12 4v11m-5-5l5 5 5-5M5 20h14"/></svg><span data-i18n="savePdf"></span></button>
-    </div>
+    <section class="list-view" id="listView" hidden>
+      <form id="theForm" autocomplete="on" novalidate></form>
+      <div class="form-end">
+        <button class="btn ghost" id="scanMoreBtn" type="button" data-i18n="scanMore"></button>
+      </div>
+    </section>
   </main>
 
   <!-- dialogs -->
@@ -130,6 +131,7 @@
       <label class="switch-row"><span><span class="sr-title" data-i18n="flatten"></span><span class="sr-sub" data-i18n="flattenText"></span></span><input type="checkbox" id="flattenInput" class="switch"></label>
       <div id="saveNotes"></div>
       <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="previewBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><span data-i18n="preview"></span></button>
         <button type="button" class="btn secondary" id="shareBtn" hidden><svg viewBox="0 0 24 24" class="ico"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4"/></svg><span data-i18n="share"></span></button>
         <button type="button" class="btn primary" id="downloadBtn"><svg viewBox="0 0 24 24" class="ico"><path d="M12 4v11m-5-5l5 5 5-5M5 20h14"/></svg><span data-i18n="download"></span></button>
       </div>
@@ -140,6 +142,17 @@
     <div class="sheet-body">
       <div class="sheet-head"><h2 data-i18n="previewTitle"></h2><button class="icon-btn" id="previewClose" data-i18n-aria="close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
       <div id="previewPages" class="preview-pages"></div>
+    </div>
+  </dialog>
+
+  <dialog id="sigDlg" class="sheet">
+    <div class="sheet-body">
+      <div class="sheet-head"><h2 id="sigTitle" data-i18n="signHere"></h2><button class="icon-btn" id="sigClose" data-i18n-aria="close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+      <div class="sig-pad big"><div class="sig-line"></div><canvas id="sigCanvas"></canvas><span class="sig-ph" data-i18n="signHere"></span></div>
+      <div class="sheet-actions">
+        <button type="button" class="btn ghost" id="sigClear" data-i18n="clear"></button>
+        <button type="button" class="btn primary" id="sigUse" data-i18n="done"></button>
+      </div>
     </div>
   </dialog>
 

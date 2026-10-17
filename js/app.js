@@ -12,7 +12,6 @@ const el = (tag, attrs = {}, ...kids) => {
     if (v == null || v === false) continue;
     if (k === 'class') e.className = v;
     else if (k === 'text') e.textContent = v;
-    else if (k === 'html') e.innerHTML = v;
     else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
     else if (k === 'dataset') Object.assign(e.dataset, v);
     else e.setAttribute(k, v === true ? '' : v);
@@ -25,17 +24,22 @@ const ICONS = {
   pin: '<path d="M12 21s-6-5.6-6-11a6 6 0 0112 0c0 5.4-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/>',
   trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  move: '<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
+  next: '<path d="M9 5l7 7-7 7"/>',
+  save: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
 };
 
 const S = {
   bytes: null, fileName: '', password: undefined, encrypted: false,
-  doc: null, pages: [], segsByPage: [], fields: [], values: {},
-  currentPage: 0, currentId: null, addMode: null, fingerprint: '', loaded: false,
-  renderCache: new Map(), customCount: 0,
+  task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {},
+  currentId: null, addMode: null, fingerprint: '', loaded: false, customCount: 0,
+  zoom: 1, pageEls: [], editor: null, tab: 'pdf',
 };
 
 // ------------------------------------------------------------------ helpers
-const isMobile = () => matchMedia('(max-width: 979px)').matches;
+const isTouch = () => matchMedia('(pointer: coarse)').matches;
+const isNarrow = () => matchMedia('(max-width: 760px)').matches;
+const TEXTLIKE = new Set(['text', 'multiline']);
 function toast(msg, kind = '', ms = 3200) {
   const n = el('div', { class: 'toast ' + kind, text: msg });
   $('#toasts').append(n);
@@ -64,6 +68,12 @@ const store = {
 };
 const normLabel = (s) => (s || '').toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9æøåäöüé]+/g, ' ').trim();
 const fieldById = (id) => S.fields.find((f) => f.id === id);
+const fieldPage = (f) => (f.widgets.length ? f.widgets[0].page : f.page);
+const fieldRect = (f) => (f.widgets.length ? f.widgets[0].rect : f.rect);
+const fontPt = (f, r = fieldRect(f)) => (f.type === 'multiline' ? Math.min(11, Math.max(7, r.h / 3)) : Math.max(6, Math.min(11, r.h * 0.68)));
+const displayOf = (f, v) => { const o = f.options.find((x) => x.value === v); return o ? o.label : (v || ''); };
+const valueOf = (f, label) => { const o = f.options.find((x) => x.label === label); return o ? o.value : label; };
+const isTyped = (f) => TEXTLIKE.has(f.type) && (!f.signature || f.sigTyped);
 
 // ------------------------------------------------------------------ boot
 function boot() {
@@ -74,7 +84,7 @@ function boot() {
   $('#langBtn').addEventListener('click', () => {
     setLang(getLang() === 'nb' ? 'en' : 'nb');
     updateLangBtn();
-    if (S.loaded) { renderForm(); renderPagePanel(); updateHeader(); }
+    if (S.loaded) { updateHeader(); updateEditBar(); if (S.tab === 'list') renderForm(); }
   });
 
   const input = $('#fileInput');
@@ -90,9 +100,8 @@ function boot() {
     busy(t('reading'));
     try {
       const r = await fetch(b.dataset.sample);
-      const buf = new Uint8Array(await r.arrayBuffer());
-      await loadBytes(buf, b.dataset.sample.split('/').pop());
-    } catch (e) { busy(false); toast(t('loadFailed'), 'warn'); }
+      await loadBytes(new Uint8Array(await r.arrayBuffer()), b.dataset.sample.split('/').pop());
+    } catch { busy(false); toast(t('loadFailed'), 'warn'); }
   }));
 
   $('#newBtn').addEventListener('click', () => goHome());
@@ -103,11 +112,6 @@ function boot() {
   });
 
   $$('.tab').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
-  $('#prevPage').addEventListener('click', () => showPage(S.currentPage - 1));
-  $('#nextPage').addEventListener('click', () => showPage(S.currentPage + 1));
-  $('#addBtn').addEventListener('click', () => setAddMode('text'));
-  $$('[data-add]').forEach((b) => b.addEventListener('click', () => setAddMode(b.dataset.add)));
-  $('#addDone').addEventListener('click', () => setAddMode(null));
   $('#scanMoreBtn').addEventListener('click', scanMore);
   $('#previewBtn').addEventListener('click', preview);
   $('#saveBtn').addEventListener('click', openSave);
@@ -117,27 +121,50 @@ function boot() {
   $$('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close('cancel'); }));
   $('#saveForm').addEventListener('change', updateSaveNotes);
 
+  // editing bar: keep the keyboard open while jumping (don't let the buttons steal focus)
+  for (const id of ['#prevBtn', '#nextBtn']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
+  $('#prevBtn').addEventListener('click', () => step(-1));
+  $('#nextBtn').addEventListener('click', () => step(1));
+
+  $('#zoomIn').addEventListener('click', () => setZoom(S.zoom * 1.25));
+  $('#zoomOut').addEventListener('click', () => setZoom(S.zoom / 1.25));
+  $('#zoomLabel').addEventListener('click', () => setZoom(1));
+  $('#addBtn').addEventListener('click', () => setAddMode(S.addMode ? null : 'text'));
+  $$('[data-add]').forEach((b) => b.addEventListener('click', () => setAddMode(b.dataset.add)));
+  $('#addDone').addEventListener('click', () => setAddMode(null));
+
+  setupStage();
+  setupSignatureDialog();
   window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 4), { passive: true });
   window.addEventListener('popstate', () => { if (S.loaded && !$('#fill').hidden) goHome(true); });
-  new ResizeObserver(() => sizeOverlay()).observe($('#pageWrap'));
-  setupPageInteractions();
+  let lastW = innerWidth;
+  window.addEventListener('resize', () => {
+    detectKeyboard();
+    if (!S.loaded) return;
+    if (Math.abs(innerWidth - lastW) > 30) { lastW = innerWidth; layoutPages(true); }
+    if (S.editor) requestAnimationFrame(() => ensureVisible(fieldById(S.currentId), false));
+  });
   setupPwa();
 }
-
 function updateLangBtn() { $('#langBtn').textContent = getLang() === 'nb' ? 'EN' : 'NO'; $('#langBtn').title = t('language'); }
+
+// hide the chrome while the on-screen keyboard is up so there's room to see the box
+let fullH = innerHeight;
+function detectKeyboard() {
+  if (!isTouch()) return;
+  if (innerHeight > fullH) fullH = innerHeight;
+  const ae = document.activeElement;
+  const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA') && ae.type !== 'date';
+  document.body.classList.toggle('kb', !!(S.loaded && typing && innerHeight < fullH * 0.78));
+}
+screen.orientation?.addEventListener?.('change', () => { fullH = 0; setTimeout(() => { fullH = innerHeight; }, 400); });
 
 // ------------------------------------------------------------------ loading
 async function loadFile(file) {
   if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) { toast(t('notPdf'), 'warn'); return; }
   busy(t('reading'));
-  try {
-    const buf = new Uint8Array(await file.arrayBuffer());
-    await loadBytes(buf, file.name);
-  } catch (e) {
-    console.error(e);
-    busy(false);
-    toast(t('loadFailed'), 'warn');
-  }
+  try { await loadBytes(new Uint8Array(await file.arrayBuffer()), file.name); }
+  catch (e) { console.error(e); busy(false); toast(t('loadFailed'), 'warn'); }
 }
 
 function askPassword(wrong) {
@@ -157,10 +184,9 @@ async function loadBytes(bytes, name) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
   if (!head.includes('%PDF')) { busy(false); toast(t('notPdf'), 'warn'); return; }
   if (S.task) { try { await S.task.destroy(); } catch {} }
-  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentPage: 0, currentId: null, renderCache: new Map(), customCount: 0, addMode: null });
+  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentId: null, customCount: 0, addMode: null, zoom: 1, editor: null });
 
-  // open (asking for a password if needed)
-  let task = openPdf(bytes);
+  const task = openPdf(bytes);
   task.onPassword = async (update, reason) => {
     const pw = await askPassword(reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD);
     if (pw == null) { task.destroy(); return; }
@@ -171,13 +197,12 @@ async function loadBytes(bytes, name) {
   let doc;
   try { doc = await task.promise; } catch (e) {
     busy(false);
-    if (e?.name !== 'AbortException' && !/destroyed|worker was destroyed/i.test(e?.message || '')) toast(t('loadFailed'), 'warn');
+    if (e?.name !== 'AbortException' && !/destroyed/i.test(e?.message || '')) toast(t('loadFailed'), 'warn');
     return;
   }
   S.doc = doc;
   S.task = task;
   S.fingerprint = (doc.fingerprints && doc.fingerprints[0]) || name + bytes.length;
-  // protected PDFs (owner password / permissions) can't be edited by pdf-lib
   const tail = new TextDecoder('latin1').decode(bytes.length > 4e6 ? bytes.subarray(bytes.length - 2e6) : bytes);
   S.encrypted = /\/Encrypt\s*[\d<]/.test(tail) || S.password != null;
 
@@ -222,37 +247,51 @@ async function scanMore() {
   if (!more.length) { toast(t('noFieldsTitle')); return; }
   for (const f of more) S.values[f.id] = structuredClone(f.initial);
   S.fields = sortFields([...S.fields, ...more]);
-  S.isFlat = S.isFlat || S.fields.every((f) => f.source === 'flat');
-  renderForm(); renderPagePanel(); updateHeader();
+  renderForm(); renderAllOverlays(); updateHeader(); updateEditBar();
   toast(t(more.length === 1 ? 'fieldsFound1' : 'fieldsFound', { n: more.length }));
 }
 
 function showFill() {
   $('#home').hidden = true;
   $('#fill').hidden = false;
+  document.body.classList.add('app-mode');
   if (history.state?.view !== 'fill') history.pushState({ view: 'fill' }, '');
   scrollTo(0, 0);
-  setTab('form');
+  $('#notices').innerHTML = '';
+  if (S.isFlat && S.fields.length) addNotice(t('flatNotice'), 'info', true);
   $('#scanMoreBtn').hidden = S.isFlat;
-  renderForm();
+  buildPages();
+  setTab('pdf');
   updateHeader();
-  showPage(0);
+  updateEditBar();
 }
 
 function goHome(fromPop) {
+  closeEditor();
   saveDraftNow();
   $('#fill').hidden = true;
   $('#home').hidden = false;
+  document.body.classList.remove('app-mode', 'kb');
   S.loaded = false;
   setAddMode(null);
   if (!fromPop && history.state?.view === 'fill') history.back();
   scrollTo(0, 0);
 }
 
+function addNotice(text, kind, dismissible, actions) {
+  const n = el('div', { class: 'notice ' + kind }, el('div', { class: 'grow' }, text, actions || null),
+    dismissible ? el('button', { class: 'mini-btn x', type: 'button', 'aria-label': t('close'), onclick: () => n.remove() }, svgIcon('<path d="M6 6l12 12M18 6L6 18"/>')) : null);
+  $('#notices').append(n);
+  return n;
+}
+
 function setTab(tab) {
+  S.tab = tab;
   $$('.tab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $('.workspace').dataset.tab = tab;
-  if (tab === 'pages') { sizeOverlay(); showPage(S.currentPage); }
+  $('#pdfView').hidden = tab !== 'pdf';
+  $('#listView').hidden = tab !== 'list';
+  if (tab === 'list') { closeEditor(); renderForm(); }
+  else { renderAllOverlays(); layoutPages(); }
 }
 
 function updateHeader() {
@@ -264,25 +303,528 @@ function updateHeader() {
   $('#progressBar').style.width = total ? (filled / total) * 100 + '%' : '0';
 }
 
-// ------------------------------------------------------------------ form rendering
+// ------------------------------------------------------------------ pages (continuous, zoomable)
+let io = null;
+function buildPages() {
+  const box = $('#pagesBox');
+  box.innerHTML = '';
+  S.pageEls = [];
+  io?.disconnect();
+  io = new IntersectionObserver((entries) => {
+    for (const e of entries) { const pe = S.pageEls[+e.target.dataset.page]; if (pe) pe.visible = e.isIntersecting; }
+    scheduleRender();
+  }, { root: $('#stage'), rootMargin: '700px 0px' });
+  for (const pg of S.pages) {
+    const wrap = el('div', { class: 'page-wrap', dataset: { page: pg.index } });
+    const overlay = el('div', { class: 'overlay', dataset: { page: pg.index } });
+    const canvas = el('canvas');
+    wrap.append(canvas, overlay);
+    if (S.pages.length > 1) wrap.append(el('div', { class: 'page-num', text: t('pageOf', { a: pg.index + 1, b: S.pages.length }) }));
+    box.append(wrap);
+    const pe = { index: pg.index, wrap, canvas, overlay, scale: 0, k: 1, visible: pg.index < 2 };
+    S.pageEls.push(pe);
+    io.observe(wrap);
+  }
+  $('#stage').scrollTo(0, 0);
+  layoutPages();
+}
+
+function fitWidth() {
+  const sw = $('#stage').clientWidth || innerWidth;
+  return Math.max(240, Math.min(sw - 24, 920));
+}
+function layoutPages(keepEditor) {
+  if (!S.pageEls.length) return;
+  const maxW = Math.max(...S.pages.map((p) => p.viewport.width));
+  const base = fitWidth();
+  for (const pe of S.pageEls) {
+    const vp = S.pages[pe.index].viewport;
+    const w = base * S.zoom * (vp.width / maxW);
+    pe.k = w / vp.width;
+    pe.wrap.style.width = w + 'px';
+    pe.wrap.style.height = (w * vp.height) / vp.width + 'px';
+    pe.overlay.style.setProperty('--k', String(pe.k));
+  }
+  $('#zoomLabel').textContent = Math.round(S.zoom * 100) + '%';
+  scheduleRender();
+  if (keepEditor && S.editor) ensureVisible(fieldById(S.currentId), false);
+}
+
+function setZoom(z, anchor) {
+  const stage = $('#stage');
+  z = Math.max(0.5, Math.min(5, z));
+  if (Math.abs(z - S.zoom) < 0.001) return;
+  const sr = stage.getBoundingClientRect();
+  const ax = anchor ? anchor.x - sr.left : sr.width / 2;
+  const ay = anchor ? anchor.y - sr.top : sr.height / 2;
+  const cx = stage.scrollLeft + ax, cy = stage.scrollTop + ay;
+  const ratio = z / S.zoom;
+  S.zoom = z;
+  layoutPages();
+  stage.scrollLeft = cx * ratio - ax;
+  stage.scrollTop = cy * ratio - ay;
+}
+
+let renderTimer = null, rendering = false, renderAgain = false;
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(runRender, 90); }
+async function runRender() {
+  if (rendering) { renderAgain = true; return; }
+  rendering = true;
+  try {
+    const dpr = Math.min(3, devicePixelRatio || 1);
+    const stage = $('#stage');
+    const mid = stage.scrollTop + stage.clientHeight / 2;
+    const order = S.pageEls.filter((p) => p.visible).sort((a, b) => Math.abs(a.wrap.offsetTop - mid) - Math.abs(b.wrap.offsetTop - mid));
+    for (const pe of order) {
+      const vp = S.pages[pe.index].viewport;
+      const maxScale = Math.sqrt(16e6 / (vp.width * vp.height));
+      const want = Math.min(maxScale, pe.k * dpr);
+      if (pe.scale && Math.abs(pe.scale - want) / want < 0.12) continue;
+      await renderPage(pe, want);
+    }
+    // free memory of pages far away
+    const rendered = S.pageEls.filter((p) => p.scale && !p.visible);
+    if (S.pageEls.filter((p) => p.scale).length > 6) for (const pe of rendered) { pe.canvas.width = 0; pe.canvas.height = 0; pe.scale = 0; }
+  } finally {
+    rendering = false;
+    if (renderAgain) { renderAgain = false; scheduleRender(); }
+  }
+}
+async function renderPage(pe, scale) {
+  const pg = S.pages[pe.index];
+  const vp = pg.page.getViewport({ scale });
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  try {
+    await pg.page.render({ canvasContext: ctx, canvas: c, viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise;
+  } catch (e) { console.warn('render failed', e); return; }
+  pe.canvas.replaceWith(c);
+  pe.canvas = c;
+  pe.scale = scale;
+}
+
+// ------------------------------------------------------------------ boxes on the pages
+function boxesOf(f) {
+  if (f.type === 'radio') return f.options.map((o, i) => ({ r: o.widget.rect, p: o.widget.page, opt: o.value, i }));
+  if (f.widgets.length) return f.widgets.map((w, i) => ({ r: w.rect, p: w.page, i }));
+  return [{ r: f.rect, p: f.page, i: 0 }];
+}
+function renderAllOverlays() {
+  for (const pe of S.pageEls) pe.overlay.innerHTML = '';
+  for (const f of S.fields) for (const b of boxesOf(f)) addBox(f, b);
+  highlightCurrent();
+}
+function addBox(f, b) {
+  const pe = S.pageEls[b.p];
+  if (!pe) return;
+  const vp = S.pages[b.p].viewport;
+  const node = el('div', { class: `ov ${f.source === 'flat' ? 'flat' : ''} ${f.type === 'multiline' ? 'multi' : ''} ${f.type === 'checkbox' || f.type === 'radio' ? 'check' : ''}`, dataset: { id: f.id, opt: b.opt ?? '', bi: b.i }, title: f.label });
+  place(node, b.r, vp);
+  if (f.source === 'flat') node.append(el('div', { class: 'grip' }, svgIcon(ICONS.move)), el('div', { class: 'handle' }));
+  pe.overlay.append(node);
+  paintBox(node, f, b.r);
+}
+function place(node, r, vp) {
+  Object.assign(node.style, { left: (r.x / vp.width) * 100 + '%', top: (r.y / vp.height) * 100 + '%', width: (r.w / vp.width) * 100 + '%', height: (r.h / vp.height) * 100 + '%' });
+}
+function paintBox(node, f, r) {
+  const v = S.values[f.id];
+  node.classList.toggle('filled', hasValue(f, v));
+  [...node.childNodes].forEach((c) => { if (!c.classList || !(c.classList.contains('handle') || c.classList.contains('grip'))) c.remove(); });
+  node.style.fontSize = `calc(var(--k) * ${fontPt(f, r)}px)`;
+  node.style.padding = '0 calc(var(--k) * 2px)';
+  let content = '';
+  if (f.type === 'checkbox') content = v ? '✔' : '';
+  else if (f.type === 'radio') content = v != null && v !== '' && v === node.dataset.opt ? '●' : '';
+  else if (v && typeof v === 'object' && v.sig) content = el('img', { src: v.sig, alt: '' });
+  else if (v && typeof v === 'object' && 'text' in v) content = v.text;
+  else if (Array.isArray(v)) content = v.map((x) => displayOf(f, x)).join(', ');
+  else if (f.type === 'select' || f.type === 'list') content = displayOf(f, v);
+  else if (f.isDate && v) content = formatDate(v, f.dateFormat);
+  else content = v || '';
+  if (f.type === 'checkbox' || f.type === 'radio') node.style.fontSize = `calc(var(--k) * ${Math.min(r.w, r.h) * 0.85}px)`;
+  if (content) node.prepend(content.nodeType ? content : document.createTextNode(content));
+}
+function repaint(f) {
+  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((node) => {
+    const b = boxesOf(f)[+node.dataset.bi];
+    if (b) paintBox(node, f, b.r);
+  });
+}
+function highlightCurrent() {
+  $$('.ov').forEach((n) => n.classList.toggle('current', n.dataset.id === S.currentId));
+}
+
+// ------------------------------------------------------------------ editing in place
+function setValue(f, v) {
+  S.values[f.id] = v;
+  repaint(f);
+  updateHeader();
+  scheduleDraft();
+  if (S.tab === 'list') refreshFilledState(f);
+}
+
+function closeEditor() {
+  const ed = S.editor;
+  if (!ed) return;
+  S.editor = null;
+  ed.remove();
+  const f = fieldById(ed.dataset.id);
+  if (f) repaint(f);
+  detectKeyboard();
+}
+
+/**
+ * Makes a field the current one. For text boxes an input is placed exactly over the box
+ * and focused (this must happen synchronously inside the tap, or phones won't show the keyboard).
+ */
+function activate(f, how = {}) {
+  if (!f) return;
+  const prev = S.editor;
+  S.currentId = f.id;
+  highlightCurrent();
+  let focused = null;
+  if (isTyped(f)) {
+    focused = makeEditor(f);
+    focused.focus({ preventScroll: true });
+    if (f.isDate && how.tap) { try { focused.showPicker(); } catch {} }
+  } else if (document.activeElement && document.activeElement !== document.body) {
+    document.activeElement.blur(); // hide the keyboard for tick boxes, choices etc.
+  }
+  if (prev && prev !== focused) { prev.remove(); const pf = fieldById(prev.dataset.id); if (pf) repaint(pf); }
+  if (!focused) S.editor = null;
+
+  if (how.tap) {
+    if (f.type === 'checkbox') setValue(f, !S.values[f.id]);
+    else if (f.type === 'radio' && how.opt != null) setValue(f, S.values[f.id] === how.opt ? '' : how.opt);
+    else if (f.signature && !f.sigTyped) openSignature(f);
+  }
+  updateEditBar();
+  if (how.tap && f.type === 'select') { const sel = $('#ebSlot select'); if (sel) { sel.focus(); try { sel.showPicker(); } catch {} } }
+  if (focused) autoZoom(f);
+  requestAnimationFrame(() => ensureVisible(f, !how.tap));
+}
+
+function makeEditor(f) {
+  const pe = S.pageEls[fieldPage(f)];
+  const vp = S.pages[fieldPage(f)].viewport;
+  const r = fieldRect(f);
+  const v = S.values[f.id];
+  const text = v && typeof v === 'object' ? (v.text || '') : (v || '');
+  let ed;
+  if (f.type === 'multiline') ed = el('textarea', { class: 'ov-editor', spellcheck: 'true' });
+  else if (f.isDate) ed = el('input', { class: 'ov-editor', type: 'date' });
+  else ed = el('input', { class: 'ov-editor', type: f.inputType || 'text', autocomplete: f.autocomplete || 'off', inputmode: f.inputmode || null, enterkeyhint: 'next', spellcheck: f.autocomplete ? 'false' : null, maxlength: f.maxLen || null });
+  if (f.type !== 'multiline' && f.maxLen) ed.maxLength = f.maxLen;
+  ed.value = text;
+  ed.dataset.id = f.id;
+  ed.setAttribute('aria-label', f.label);
+  place(ed, r, vp);
+  ed.style.fontSize = `calc(var(--k) * ${fontPt(f, r)}px)`;
+  ed.addEventListener('input', () => setValue(f, f.signature ? { text: ed.value } : ed.value));
+  ed.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && f.type !== 'multiline') { e.preventDefault(); step(1); }
+    if (e.key === 'Tab') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+    if (e.key === 'Escape') { ed.blur(); }
+  });
+  ed.addEventListener('focus', detectKeyboard);
+  ed.addEventListener('blur', () => setTimeout(detectKeyboard, 50));
+  // suggestions from earlier answers
+  const sugg = (store.get('ff:memory', {})[normLabel(f.label)] || []).filter(Boolean);
+  if (sugg.length && !f.isDate) {
+    const dl = el('datalist', { id: 'dl-ed' }, sugg.map((s) => el('option', { value: s })));
+    $('#dl-ed')?.remove();
+    document.body.append(dl);
+    ed.setAttribute('list', 'dl-ed');
+  }
+  pe.overlay.append(ed);
+  S.editor = ed;
+  // hide the box's own preview text underneath
+  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => { [...n.childNodes].forEach((c) => { if (c.nodeType === 3 || c.tagName === 'IMG') c.remove(); }); });
+  return ed;
+}
+
+function step(dir) {
+  if (!S.fields.length) return;
+  const i = S.fields.findIndex((f) => f.id === S.currentId);
+  let j = i < 0 ? (dir > 0 ? 0 : S.fields.length - 1) : i + dir;
+  if (j >= S.fields.length) { closeEditor(); document.activeElement?.blur(); toast(t('lastField')); openSave(); return; }
+  if (j < 0) return;
+  activate(S.fields[j], { nav: true });
+}
+
+function autoZoom(f) {
+  if (!isTouch() && !isNarrow()) return;
+  const pe = S.pageEls[fieldPage(f)];
+  const px = pe.k * fontPt(f);
+  const target = 15; // readable text size while typing (CSS px)
+  if (px < target * 0.92) {
+    const z = Math.min(5, S.zoom * (target / px));
+    const node = $(`.ov[data-id="${CSS.escape(f.id)}"]`);
+    const r = node?.getBoundingClientRect();
+    setZoom(z, r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null);
+  }
+}
+
+function ensureVisible(f, smooth = true) {
+  if (!f) return;
+  const node = $(`.ov[data-id="${CSS.escape(f.id)}"]`);
+  const stage = $('#stage');
+  if (!node) return;
+  const sr = stage.getBoundingClientRect();
+  const br = node.getBoundingClientRect();
+  const margin = 14;
+  let dx = 0, dy = 0;
+  if (br.top < sr.top + margin || br.bottom > sr.bottom - margin) {
+    const wantTop = S.editor ? Math.min(sr.height * 0.3, Math.max(margin, sr.height - br.height - margin)) : (sr.height - br.height) / 2;
+    dy = br.top - sr.top - wantTop;
+  }
+  if (br.left < sr.left + margin || br.right > sr.right - margin) {
+    // leave room on the left for the printed label next to the box
+    const wantLeft = br.width + 2 * margin < sr.width ? Math.max(margin, Math.min(sr.width * 0.32, sr.width - br.width - margin)) : margin;
+    dx = br.left - sr.left - wantLeft;
+  }
+  if (dx || dy) stage.scrollBy({ left: dx, top: dy, behavior: smooth ? 'smooth' : 'auto' });
+}
+
+function updateEditBar() {
+  const label = $('#ebLabel'), count = $('#ebCount'), slot = $('#ebSlot');
+  slot.innerHTML = '';
+  const n = S.fields.length;
+  const i = S.fields.findIndex((f) => f.id === S.currentId);
+  const f = S.fields[i];
+  $('#prevBtn').disabled = i <= 0;
+  $('#nextBtn').disabled = !n;
+  $('#nextBtn').replaceChildren(svgIcon(i === n - 1 ? ICONS.save : ICONS.next));
+  $('#nextBtn').setAttribute('aria-label', i === n - 1 ? t('savePdf') : t('nextField'));
+  if (!n) { label.textContent = t('noFieldsBar'); count.textContent = ''; return; }
+  if (!f) { label.textContent = t('tapBox'); count.textContent = `${n}`; return; }
+  label.replaceChildren(document.createTextNode(f.context && f.type === 'checkbox' ? `${f.context}: ${f.label}` : f.label), f.required ? el('span', { class: 'req', text: '*' }) : '');
+  count.textContent = `${i + 1}/${n}`;
+  const chip = (text, on, onclick, extra = {}) => el('button', { class: 'chip' + (on ? ' on' : ''), type: 'button', text, onclick, ...extra });
+  const keep = { onpointerdown: (e) => e.preventDefault() };
+
+  if (f.type === 'checkbox') {
+    const on = !!S.values[f.id];
+    slot.append(chip(on ? '✔ ' + t('ticked') : t('tick'), on, () => { setValue(f, !S.values[f.id]); updateEditBar(); }));
+  } else if (f.type === 'radio') {
+    for (const o of f.options) slot.append(chip(o.label || o.value, S.values[f.id] === o.value, () => { setValue(f, S.values[f.id] === o.value ? '' : o.value); updateEditBar(); }));
+  } else if (f.type === 'select' || (f.type === 'list' && !f.multiSelect)) {
+    const sel = el('select', { 'aria-label': f.label, onchange: (e) => setValue(f, e.target.value) },
+      el('option', { value: '', text: t('choosePlaceholder') }), f.options.map((o) => el('option', { value: o.value, text: o.label })));
+    const v = S.values[f.id];
+    sel.value = Array.isArray(v) ? (v[0] ?? '') : (v ?? '');
+    if (sel.value !== (Array.isArray(v) ? (v[0] ?? '') : (v ?? '')) && f.editable && v) sel.prepend(el('option', { value: v, text: v, selected: true }));
+    slot.append(sel);
+  } else if (f.type === 'list') {
+    const cur = new Set(Array.isArray(S.values[f.id]) ? S.values[f.id] : []);
+    for (const o of f.options) slot.append(chip(o.label, cur.has(o.value), () => { cur.has(o.value) ? cur.delete(o.value) : cur.add(o.value); setValue(f, [...cur]); updateEditBar(); }));
+  } else if (f.signature) {
+    const v = S.values[f.id];
+    slot.append(chip('✍ ' + t('signBtn'), !!(v && v.sig), () => { f.sigTyped = false; openSignature(f); }));
+    if (f.type !== 'signature') slot.append(chip(t('typeBtn'), !!f.sigTyped, () => { f.sigTyped = true; if (v && v.sig) setValue(f, { text: '' }); activate(f, { nav: true }); }, keep));
+    if (hasValue(f, v)) slot.append(chip(t('clear'), false, () => { setValue(f, ''); closeEditor(); f.sigTyped = false; updateEditBar(); }));
+  } else if (f.dateChip && !f.isDate) {
+    slot.append(chip(t('today'), false, () => {
+      const s = formatDate(new Date().toISOString().slice(0, 10), getLang() === 'nb' ? 'dd.mm.yyyy' : 'mm/dd/yyyy');
+      setValue(f, s); if (S.editor) S.editor.value = s;
+    }, keep));
+  }
+  if (f.source === 'flat') slot.append(el('button', { class: 'mini-btn', type: 'button', title: t('removeField'), 'aria-label': t('removeField'), onpointerdown: (e) => e.preventDefault(), onclick: () => removeField(f) }, svgIcon(ICONS.trash)));
+}
+
+function removeField(f) {
+  const i = S.fields.indexOf(f);
+  if (S.currentId === f.id) closeEditor();
+  S.fields = S.fields.filter((x) => x !== f);
+  delete S.values[f.id];
+  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => n.remove());
+  S.currentId = null;
+  const next = S.fields[Math.min(i, S.fields.length - 1)];
+  if (S.tab === 'list') renderForm();
+  updateHeader(); scheduleDraft();
+  if (next && S.tab === 'pdf') { S.currentId = next.id; highlightCurrent(); }
+  updateEditBar();
+}
+
+// taps, drags and pinch-zoom on the pages
+function setupStage() {
+  const stage = $('#stage');
+  const ptOn = (pe, e) => {
+    const r = pe.overlay.getBoundingClientRect();
+    const vp = S.pages[pe.index].viewport;
+    return { x: ((e.clientX - r.left) / r.width) * vp.width, y: ((e.clientY - r.top) / r.height) * vp.height };
+  };
+  // tap a box -> edit it
+  stage.addEventListener('click', (e) => {
+    if (e.target.closest('.ov-editor, .grip, .handle')) return;
+    const ov = e.target.closest('.overlay');
+    if (!ov) return;
+    const pe = S.pageEls[+ov.dataset.page];
+    if (S.addMode) { addFieldAt(pe, ptOn(pe, e)); return; }
+    const node = e.target.closest('.ov');
+    if (!node) { if (S.editor) { closeEditor(); document.activeElement?.blur(); } return; }
+    const f = fieldById(node.dataset.id);
+    activate(f, { tap: true, opt: node.dataset.opt || null });
+  });
+  // move / resize detected boxes with their handles
+  let drag = null;
+  stage.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('.grip, .handle');
+    if (!h) return;
+    const node = h.closest('.ov');
+    const f = fieldById(node.dataset.id);
+    const pe = S.pageEls[f.page];
+    e.preventDefault();
+    h.setPointerCapture(e.pointerId);
+    drag = { f, node, pe, start: ptOn(pe, e), rect: { ...f.rect }, resize: h.classList.contains('handle'), id: e.pointerId };
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!drag || drag.id !== e.pointerId) return;
+    const p = ptOn(drag.pe, e);
+    const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+    const vp = S.pages[drag.pe.index].viewport;
+    const r = drag.f.rect;
+    if (drag.resize) { r.w = Math.max(8, drag.rect.w + dx); r.h = Math.max(6, drag.rect.h + dy); }
+    else { r.x = Math.min(vp.width - 4, Math.max(0, drag.rect.x + dx)); r.y = Math.min(vp.height - 4, Math.max(0, drag.rect.y + dy)); }
+    place(drag.node, r, vp);
+    if (S.editor && S.editor.dataset.id === drag.f.id) { place(S.editor, r, vp); S.editor.style.fontSize = `calc(var(--k) * ${fontPt(drag.f, r)}px)`; }
+    else paintBox(drag.node, drag.f, r);
+  });
+  const endDrag = () => { if (drag) { drag = null; scheduleDraft(); } };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  // two-finger pinch zoom
+  let pinch = null;
+  const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  stage.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 2) pinch = { d: dist(e.touches[0], e.touches[1]), z: S.zoom };
+  }, { passive: true });
+  stage.addEventListener('touchmove', (e) => {
+    if (!pinch || e.touches.length !== 2) return;
+    e.preventDefault();
+    const [a, b] = e.touches;
+    const z = pinch.z * (dist(a, b) / pinch.d);
+    setZoom(z, { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+  }, { passive: false });
+  stage.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = null; });
+  // ctrl/⌘ + wheel zoom on desktop
+  stage.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    setZoom(S.zoom * Math.exp(-e.deltaY / 300), { x: e.clientX, y: e.clientY });
+  }, { passive: false });
+  stage.addEventListener('scroll', () => scheduleRender(), { passive: true });
+}
+
+function addFieldAt(pe, p) {
+  const vp = S.pages[pe.index].viewport;
+  S.customCount++;
+  const isCheck = S.addMode === 'checkbox';
+  const rect = isCheck ? { x: p.x - 6, y: p.y - 6, w: 12, h: 12 } : { x: p.x - 3, y: p.y - 9, w: Math.max(40, Math.min(200, vp.width - p.x - 10)), h: 17 };
+  const f = finishFlatFields([{ type: isCheck ? 'checkbox' : 'text', rect, page: pe.index, label: t('addedField', { n: S.customCount }) }])[0];
+  f.custom = true;
+  S.fields.push(f);
+  sortFields(S.fields);
+  S.values[f.id] = isCheck ? true : '';
+  setAddMode(null);
+  for (const b of boxesOf(f)) addBox(f, b);
+  updateHeader(); scheduleDraft();
+  activate(f, {});
+}
+
+function setAddMode(mode) {
+  S.addMode = mode;
+  $('#addMode').hidden = !mode;
+  $('#addBtn').classList.toggle('on', !!mode);
+  $$('[data-add]').forEach((b) => b.classList.toggle('active', b.dataset.add === mode));
+  $$('.overlay').forEach((o) => o.classList.toggle('adding', !!mode));
+  if (mode) closeEditor();
+}
+
+// ------------------------------------------------------------------ signatures
+let sigPad = null, sigField = null;
+function setupSignatureDialog() {
+  const canvas = $('#sigCanvas');
+  sigPad = attachPad(canvas, $('#sigDlg .sig-ph'));
+  $('#sigClear').addEventListener('click', () => sigPad.clear());
+  $('#sigClose').addEventListener('click', () => $('#sigDlg').close());
+  $('#sigUse').addEventListener('click', () => {
+    if (sigField) setValue(sigField, sigPad.hasInk() ? { sig: trimmedPng(canvas) } : '');
+    $('#sigDlg').close();
+    updateEditBar();
+  });
+}
+function openSignature(f) {
+  sigField = f;
+  closeEditor();
+  $('#sigTitle').textContent = f.label;
+  $('#sigDlg').showModal();
+  requestAnimationFrame(() => { sigPad.setup(); const v = S.values[f.id]; if (v && v.sig) sigPad.load(v.sig); });
+}
+function attachPad(canvas, placeholder, onInk) {
+  let ctx = null, drawing = false, last = null, ink = false, ratio = 1;
+  const setup = () => {
+    const r = canvas.getBoundingClientRect();
+    ratio = Math.max(2, devicePixelRatio || 1);
+    canvas.width = Math.max(10, r.width * ratio); canvas.height = Math.max(10, r.height * ratio);
+    ctx = canvas.getContext('2d');
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111a3a'; ctx.lineWidth = 2.4 * ratio;
+    ink = false; placeholder.hidden = false;
+  };
+  const pos = (e) => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * ratio, (e.clientY - r.top) * ratio]; };
+  canvas.addEventListener('pointerdown', (e) => { if (!ctx) setup(); drawing = true; canvas.setPointerCapture(e.pointerId); last = pos(e); placeholder.hidden = true; });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.beginPath(); ctx.moveTo(last[0], last[1]);
+    ctx.quadraticCurveTo(last[0], last[1], (last[0] + p[0]) / 2, (last[1] + p[1]) / 2);
+    ctx.lineTo(p[0], p[1]); ctx.stroke();
+    last = p; ink = true;
+  });
+  const end = () => { if (drawing) { drawing = false; if (ink && onInk) onInk(); } };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  return {
+    setup,
+    clear: () => { if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height); ink = false; placeholder.hidden = false; },
+    hasInk: () => ink,
+    load: (src) => { const img = new Image(); img.onload = () => { const s = Math.min(canvas.width / img.width, canvas.height / img.height); ctx.drawImage(img, 0, canvas.height - img.height * s, img.width * s, img.height * s); ink = true; placeholder.hidden = true; }; img.src = src; },
+  };
+}
+function trimmedPng(canvas) {
+  const ctx = canvas.getContext('2d');
+  const { width: w, height: h } = canvas;
+  const d = ctx.getImageData(0, 0, w, h).data;
+  let x1 = w, y1 = h, x2 = 0, y2 = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 10) { if (x < x1) x1 = x; if (x > x2) x2 = x; if (y < y1) y1 = y; if (y > y2) y2 = y; }
+  if (x2 <= x1) return canvas.toDataURL('image/png');
+  const pad = 6;
+  x1 = Math.max(0, x1 - pad); y1 = Math.max(0, y1 - pad); x2 = Math.min(w, x2 + pad); y2 = Math.min(h, y2 + pad);
+  const c = document.createElement('canvas');
+  c.width = x2 - x1; c.height = y2 - y1;
+  c.getContext('2d').drawImage(canvas, x1, y1, c.width, c.height, 0, 0, c.width, c.height);
+  return c.toDataURL('image/png');
+}
+
+// ------------------------------------------------------------------ list view (alternative to the PDF view)
 function renderForm() {
   const form = $('#theForm');
   form.innerHTML = '';
-  const notices = $('#notices');
-  notices.innerHTML = '';
   if (!S.fields.length) {
-    form.append(el('div', { class: 'empty' }, el('h3', { text: t('noFieldsTitle') }), el('p', { text: t('noFieldsText') }), el('button', { class: 'btn primary', type: 'button', text: t('addField'), onclick: () => { setTab('pages'); setAddMode('text'); } })));
+    form.append(el('div', { class: 'empty' }, el('h3', { text: t('noFieldsTitle') }), el('p', { text: t('noFieldsText') }), el('button', { class: 'btn primary', type: 'button', text: t('addField'), onclick: () => { setTab('pdf'); setAddMode('text'); } })));
     return;
   }
-  if (S.isFlat) notices.append(el('div', { class: 'notice info' }, el('div', { class: 'grow', text: t('flatNotice') })));
-
   const memory = store.get('ff:memory', {});
   let lastPage = -1, lastContext = null;
   const multiPage = S.pages.length > 1;
   S.fields.forEach((f, idx) => {
-    if (multiPage && f.page !== lastPage) {
-      form.append(el('div', { class: 'page-head', text: t('pageOf', { a: f.page + 1, b: S.pages.length }) }));
-      lastPage = f.page; lastContext = null;
+    if (multiPage && fieldPage(f) !== lastPage) {
+      form.append(el('div', { class: 'page-head', text: t('pageOf', { a: fieldPage(f) + 1, b: S.pages.length }) }));
+      lastPage = fieldPage(f); lastContext = null;
     }
     if (f.type === 'checkbox' && f.context) {
       if (f.context !== lastContext) form.append(el('div', { class: 'group-head', text: f.context }));
@@ -300,12 +842,10 @@ function fieldCard(f, idx, memory) {
     ? el('input', { class: 'input', style: 'font-weight:600;padding:6px 10px;font-size:15px', value: f.label, 'aria-label': t('renameField'), oninput: (e) => { f.label = e.target.value; scheduleDraft(); } })
     : el('label', { class: 'field-label', for: inputId, text: f.label }, f.required ? el('span', { class: 'req', text: '*', title: t('required') }) : null);
   const tools = el('div', { class: 'field-tools' },
-    el('button', { class: 'mini-btn', type: 'button', title: t('goToField'), 'aria-label': t('goToField'), onclick: () => locate(f) }, svgIcon(ICONS.pin)),
+    el('button', { class: 'mini-btn', type: 'button', title: t('goToField'), 'aria-label': t('goToField'), onclick: () => { setTab('pdf'); activate(f, { nav: true }); } }, svgIcon(ICONS.pin)),
     f.source === 'flat' ? el('button', { class: 'mini-btn', type: 'button', title: t('removeField'), 'aria-label': t('removeField'), onclick: () => removeField(f) }, svgIcon(ICONS.trash)) : null);
-  const onFocus = () => setCurrent(f.id, 'form');
-  card.addEventListener('focusin', onFocus);
-  card.addEventListener('focusout', () => setTimeout(() => { if (!card.contains(document.activeElement)) card.classList.remove('focused'); }, 0));
-  const set = (v) => { S.values[f.id] = v; onValueChanged(f); };
+  card.addEventListener('focusin', () => { S.currentId = f.id; $$('.field.focused').forEach((c) => c.classList.remove('focused')); card.classList.add('focused'); });
+  const set = (v) => { setValue(f, v); refreshFilledState(f); };
   const v = S.values[f.id];
 
   if (f.type === 'checkbox') {
@@ -318,10 +858,8 @@ function fieldCard(f, idx, memory) {
       f.custom ? lab : null, tools));
     return card;
   }
-
   card.append(el('div', { class: 'field-top' }, el('span', { class: 'filled-dot' }), labelEl, tools));
   if (f.hint) card.append(el('div', { class: 'field-hint', text: f.hint }));
-  card.append(el('div', { class: 'snippet' }, el('canvas')));
 
   if (f.type === 'radio') {
     const group = el('div', { class: 'pills', role: 'radiogroup', 'aria-label': f.label });
@@ -329,7 +867,6 @@ function fieldCard(f, idx, memory) {
     f.options.forEach((o, i) => {
       const r = el('input', { type: 'radio', name, value: o.value, id: i === 0 ? inputId : null, onchange: () => set(o.value) });
       r.checked = v === o.value;
-      // allow un-selecting by tapping the selected pill again
       r.addEventListener('click', () => { if (r.dataset.was === '1') { r.checked = false; set(''); } $$(`input[name="${name}"]`, group).forEach((x) => { x.dataset.was = x.checked ? '1' : ''; }); });
       r.dataset.was = r.checked ? '1' : '';
       group.append(el('label', { class: 'pill' }, r, el('span', { text: o.label || o.value })));
@@ -340,12 +877,10 @@ function fieldCard(f, idx, memory) {
   if (f.type === 'select' || (f.type === 'list' && !f.multiSelect)) {
     if (f.editable) {
       const dl = el('datalist', { id: 'dl-' + idx }, f.options.map((o) => el('option', { value: o.label })));
-      const inp = el('input', { class: 'input', id: inputId, list: dl.id, value: displayOf(f, v), oninput: (e) => set(valueOf(f, e.target.value)) });
-      card.append(inp, dl);
+      card.append(el('input', { class: 'input', id: inputId, list: dl.id, value: displayOf(f, v), oninput: (e) => set(valueOf(f, e.target.value)) }), dl);
     } else {
       const sel = el('select', { id: inputId, onchange: (e) => set(e.target.value) },
-        el('option', { value: '', text: t('choosePlaceholder') }),
-        f.options.map((o) => el('option', { value: o.value, text: o.label })));
+        el('option', { value: '', text: t('choosePlaceholder') }), f.options.map((o) => el('option', { value: o.value, text: o.label })));
       sel.value = Array.isArray(v) ? (v[0] ?? '') : (v ?? '');
       card.append(sel);
     }
@@ -366,8 +901,6 @@ function fieldCard(f, idx, memory) {
     card.append(signatureWidget(f, inputId, set));
     return card;
   }
-
-  // text-like
   const sugg = (memory[normLabel(f.label)] || []).filter(Boolean);
   const dl = sugg.length ? el('datalist', { id: 'dl-' + idx }, sugg.map((s) => el('option', { value: s }))) : null;
   let input;
@@ -375,117 +908,52 @@ function fieldCard(f, idx, memory) {
     input = el('textarea', { id: inputId, oninput: (e) => set(e.target.value), maxlength: f.maxLen || null, rows: Math.min(10, Math.max(3, Math.round((f.rect.h || 40) / 14))) });
     input.value = v || '';
   } else if (f.isDate) {
-    input = el('input', { class: 'input', type: 'date', id: inputId, value: v || '', autocomplete: f.autocomplete || null, oninput: (e) => set(e.target.value) });
+    input = el('input', { class: 'input', type: 'date', id: inputId, value: v || '', oninput: (e) => set(e.target.value) });
   } else {
     input = el('input', {
-      class: 'input', id: inputId, type: f.inputType || 'text', value: v || '', list: dl ? dl.id : null,
-      autocomplete: f.autocomplete || (dl ? 'off' : null), inputmode: f.inputmode || null, maxlength: f.maxLen || null,
-      enterkeyhint: 'next', spellcheck: f.autocomplete ? 'false' : null,
+      class: 'input', id: inputId, type: f.inputType || 'text', value: typeof v === 'string' ? v : '', list: dl ? dl.id : null,
+      autocomplete: f.autocomplete || (dl ? 'off' : null), inputmode: f.inputmode || null, maxlength: f.maxLen || null, enterkeyhint: 'next',
       oninput: (e) => set(e.target.value),
     });
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusNext(f); } });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusNextCard(f); } });
   }
   if (f.dateChip && !f.isDate) {
     const today = el('button', { class: 'chip', type: 'button', text: t('today'), onclick: () => { input.value = formatDate(new Date().toISOString().slice(0, 10), getLang() === 'nb' ? 'dd.mm.yyyy' : 'mm/dd/yyyy'); set(input.value); } });
     card.append(el('div', { class: 'input-row' }, input, today));
   } else card.append(input);
   if (dl) card.append(dl);
-  if (f.maxLen && f.type !== 'multiline') {
-    const counter = el('div', { class: 'counter', text: `${(v || '').length}/${f.maxLen}` });
-    input.addEventListener('input', () => { counter.textContent = `${input.value.length}/${f.maxLen}`; });
-    card.append(counter);
-  }
   return card;
 }
-
-const displayOf = (f, v) => { const o = f.options.find((x) => x.value === v); return o ? o.label : (v || ''); };
-const valueOf = (f, label) => { const o = f.options.find((x) => x.label === label); return o ? o.value : label; };
-
-function focusNext(f) {
+function focusNextCard(f) {
   const i = S.fields.indexOf(f);
   for (let k = i + 1; k < S.fields.length; k++) {
-    const c = $(`.field[data-id="${CSS.escape(S.fields[k].id)}"] input:not([type=radio]):not([type=checkbox]), .field[data-id="${CSS.escape(S.fields[k].id)}"] textarea, .field[data-id="${CSS.escape(S.fields[k].id)}"] select`);
+    const c = $(`.field[data-id="${CSS.escape(S.fields[k].id)}"]`)?.querySelector('input:not([type=radio]):not([type=checkbox]), textarea, select');
     if (c) { c.focus(); return; }
   }
   document.activeElement?.blur();
 }
-
 function signatureWidget(f, inputId, set) {
   const wrap = el('div');
-  const v = S.values[f.id];
-  const typed = (v && typeof v === 'object' && 'text' in v) || (typeof v === 'string' && v);
-  const canType = f.type !== 'signature';
-  let mode = typed && canType ? 'type' : 'draw';
   const render = () => {
     wrap.innerHTML = '';
-    if (mode === 'type') {
-      const cur = S.values[f.id];
-      const inp = el('input', { class: 'input', id: inputId, value: (cur && cur.text) || (typeof cur === 'string' ? cur : ''), autocomplete: 'name', oninput: (e) => set({ text: e.target.value }) });
+    const cur = S.values[f.id];
+    if (f.sigTyped && f.type !== 'signature') {
+      const inp = el('input', { class: 'input', id: inputId, value: (cur && cur.text) || '', autocomplete: 'name', oninput: (e) => set({ text: e.target.value }) });
       inp.style.fontStyle = 'italic';
-      wrap.append(inp, el('div', { class: 'sig-actions' }, el('button', { class: 'chip', type: 'button', text: t('drawInstead'), onclick: () => { mode = 'draw'; set(''); render(); } })));
+      wrap.append(inp, el('div', { class: 'sig-actions' }, el('button', { class: 'chip', type: 'button', text: t('drawInstead'), onclick: () => { f.sigTyped = false; set(''); render(); } })));
       return;
     }
-    const canvas = el('canvas', { id: inputId, tabindex: 0, 'aria-label': t('signHere') });
-    const pad = el('div', { class: 'sig-pad' }, el('div', { class: 'sig-line' }), canvas, el('span', { class: 'sig-ph', text: t('signHere') }));
-    const actions = el('div', { class: 'sig-actions' },
-      el('button', { class: 'chip', type: 'button', text: t('clear'), onclick: () => { clear(); set(''); } }),
-      canType ? el('button', { class: 'chip', type: 'button', text: t('typeInstead'), onclick: () => { mode = 'type'; set({ text: '' }); render(); } }) : null);
-    wrap.append(pad, actions);
-    let ctx, strokes = [], drawing = false, ratio = 1;
-    const setup = () => {
-      const r = canvas.getBoundingClientRect();
-      ratio = Math.max(2, devicePixelRatio || 1);
-      canvas.width = Math.max(10, r.width * ratio); canvas.height = 150 * ratio;
-      ctx = canvas.getContext('2d');
-      ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#111a3a'; ctx.lineWidth = 2.4 * ratio;
-      const cur = S.values[f.id];
-      if (cur && cur.sig) { const img = new Image(); img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width, canvas.height); }; img.src = cur.sig; pad.querySelector('.sig-ph').hidden = true; }
-    };
-    const clear = () => { strokes = []; ctx && ctx.clearRect(0, 0, canvas.width, canvas.height); pad.querySelector('.sig-ph').hidden = false; };
-    const pos = (e) => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * ratio, (e.clientY - r.top) * ratio]; };
-    let last = null;
-    canvas.addEventListener('pointerdown', (e) => { if (!ctx) setup(); drawing = true; canvas.setPointerCapture(e.pointerId); last = pos(e); pad.querySelector('.sig-ph').hidden = true; setCurrent(f.id, 'form'); });
-    canvas.addEventListener('pointermove', (e) => {
-      if (!drawing) return;
-      const p = pos(e);
-      ctx.beginPath(); ctx.moveTo(last[0], last[1]);
-      ctx.quadraticCurveTo(last[0], last[1], (last[0] + p[0]) / 2, (last[1] + p[1]) / 2);
-      ctx.lineTo(p[0], p[1]); ctx.stroke();
-      last = p; strokes.push(p);
-    });
-    const end = () => {
-      if (!drawing) return;
-      drawing = false;
-      if (strokes.length) set({ sig: trimmedPng(canvas) });
-    };
-    canvas.addEventListener('pointerup', end);
-    canvas.addEventListener('pointercancel', end);
-    requestAnimationFrame(setup);
+    const canvas = el('canvas', { id: inputId, 'aria-label': t('signHere') });
+    const ph = el('span', { class: 'sig-ph', text: t('signHere') });
+    const pad = el('div', { class: 'sig-pad' }, el('div', { class: 'sig-line' }), canvas, ph);
+    const p = attachPad(canvas, ph, () => set({ sig: trimmedPng(canvas) }));
+    wrap.append(pad, el('div', { class: 'sig-actions' },
+      el('button', { class: 'chip', type: 'button', text: t('clear'), onclick: () => { p.clear(); set(''); } }),
+      f.type !== 'signature' ? el('button', { class: 'chip', type: 'button', text: t('typeInstead'), onclick: () => { f.sigTyped = true; set({ text: '' }); render(); } }) : null));
+    requestAnimationFrame(() => { p.setup(); if (cur && cur.sig) p.load(cur.sig); });
   };
   render();
   return wrap;
-}
-
-function trimmedPng(canvas) {
-  const ctx = canvas.getContext('2d');
-  const { width: w, height: h } = canvas;
-  const d = ctx.getImageData(0, 0, w, h).data;
-  let x1 = w, y1 = h, x2 = 0, y2 = 0;
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 10) { if (x < x1) x1 = x; if (x > x2) x2 = x; if (y < y1) y1 = y; if (y > y2) y2 = y; }
-  if (x2 <= x1) return canvas.toDataURL('image/png');
-  const pad = 6;
-  x1 = Math.max(0, x1 - pad); y1 = Math.max(0, y1 - pad); x2 = Math.min(w, x2 + pad); y2 = Math.min(h, y2 + pad);
-  const c = document.createElement('canvas');
-  c.width = x2 - x1; c.height = y2 - y1;
-  c.getContext('2d').drawImage(canvas, x1, y1, c.width, c.height, 0, 0, c.width, c.height);
-  return c.toDataURL('image/png');
-}
-
-function onValueChanged(f) {
-  updateOverlayFor(f);
-  refreshFilledState(f);
-  updateHeader();
-  scheduleDraft();
 }
 function refreshFilledState(only) {
   for (const f of only ? [only] : S.fields) {
@@ -494,302 +962,43 @@ function refreshFilledState(only) {
   }
 }
 
-function removeField(f) {
-  S.fields = S.fields.filter((x) => x !== f);
-  delete S.values[f.id];
-  if (S.currentId === f.id) S.currentId = null;
-  renderForm(); renderPagePanel(); updateHeader(); scheduleDraft();
-}
-
-// ------------------------------------------------------------------ current field + page panel
-function setCurrent(id, from) {
-  S.currentId = id;
-  $$('.field.focused').forEach((c) => { if (c.dataset.id !== id) c.classList.remove('focused'); });
-  const card = $(`.field[data-id="${CSS.escape(id)}"]`);
-  if (card) card.classList.add('focused');
-  const f = fieldById(id);
-  if (!f) return;
-  const page = f.widgets.length ? f.widgets[0].page : f.page;
-  if (page !== S.currentPage) showPage(page); else highlightOverlay();
-  if (from === 'form' && !isMobile()) scrollOverlayIntoView(f);
-  if (from === 'form' && isMobile() && card) drawSnippet(f, card);
-}
-
-function locate(f) {
-  setCurrent(f.id, 'locate');
-  if (isMobile()) setTab('pages');
-  requestAnimationFrame(() => scrollOverlayIntoView(f, true));
-}
-
-function scrollOverlayIntoView(f, smooth) {
-  const node = $(`.ov[data-id="${CSS.escape(f.id)}"]`);
-  const stage = $('#pageStage');
-  if (!node || !stage) return;
-  if (isMobile() && $('.workspace').dataset.tab === 'pages') { node.scrollIntoView({ block: 'center', behavior: smooth ? 'smooth' : 'auto' }); return; }
-  const top = node.offsetTop - stage.clientHeight / 2 + node.offsetHeight / 2;
-  stage.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
-}
-
-async function getPageCanvas(i) {
-  if (S.renderCache.has(i)) { const c = S.renderCache.get(i); S.renderCache.delete(i); S.renderCache.set(i, c); return c; }
-  const pg = S.pages[i];
-  const scale = Math.min(3, Math.max(1.5, (devicePixelRatio || 1) * 1.25));
-  const vp = pg.page.getViewport({ scale });
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  // hide the PDF's own widgets so our overlay preview is the only thing shown on top
-  await pg.page.render({ canvasContext: ctx, canvas, viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise;
-  canvas._scale = scale;
-  S.renderCache.set(i, canvas);
-  while (S.renderCache.size > 4) S.renderCache.delete(S.renderCache.keys().next().value);
-  return canvas;
-}
-
-let showToken = 0;
-async function showPage(i) {
-  if (!S.pages.length) return;
-  i = Math.max(0, Math.min(S.pages.length - 1, i));
-  S.currentPage = i;
-  $('#pageLabel').textContent = t('pageOf', { a: i + 1, b: S.pages.length });
-  $('#prevPage').disabled = i === 0;
-  $('#nextPage').disabled = i === S.pages.length - 1;
-  const token = ++showToken;
-  const src = await getPageCanvas(i);
-  if (token !== showToken) return;
-  const c = $('#pageCanvas');
-  c.width = src.width; c.height = src.height;
-  c.getContext('2d').drawImage(src, 0, 0);
-  const vp = S.pages[i].viewport;
-  $('#pageWrap').style.aspectRatio = `${vp.width} / ${vp.height}`;
-  fitPage();
-  renderPagePanel();
-}
-
-function fitPage() {
-  const vp = S.pages[S.currentPage]?.viewport;
-  if (!vp) return;
-  const stage = $('#pageStage');
-  const avail = stage.clientWidth - 20;
-  $('#pageWrap').style.width = Math.max(200, avail) + 'px';
-}
-
-function sizeOverlay() {
-  const vp = S.pages[S.currentPage]?.viewport;
-  if (!vp) return;
-  const w = $('#pageWrap').clientWidth;
-  $('#overlay').style.setProperty('--k', String(w / vp.width));
-  if ($('#pageStage').clientWidth - 20 > 0 && Math.abs($('#pageWrap').clientWidth - ($('#pageStage').clientWidth - 20)) > 2) fitPage();
-}
-window.addEventListener('resize', () => { fitPage(); sizeOverlay(); });
-
-function renderPagePanel() {
-  const ov = $('#overlay');
-  ov.innerHTML = '';
-  const pg = S.pages[S.currentPage];
-  if (!pg) return;
-  const vp = pg.viewport;
-  sizeOverlay();
-  for (const f of S.fields) {
-    const boxes = f.type === 'radio' ? f.options.map((o) => ({ r: o.widget.rect, p: o.widget.page, opt: o.value })) : f.widgets.length ? f.widgets.map((w) => ({ r: w.rect, p: w.page })) : [{ r: f.rect, p: f.page }];
-    boxes.forEach((b, bi) => {
-      if (b.p !== S.currentPage) return;
-      const node = el('div', { class: `ov ${f.source === 'flat' ? 'flat' : ''} ${f.type === 'multiline' ? 'multi' : ''} ${f.type === 'checkbox' || f.type === 'radio' ? 'check' : ''}`, dataset: { id: f.id, opt: b.opt ?? '', bi } });
-      Object.assign(node.style, { left: (b.r.x / vp.width) * 100 + '%', top: (b.r.y / vp.height) * 100 + '%', width: (b.r.w / vp.width) * 100 + '%', height: (b.r.h / vp.height) * 100 + '%' });
-      if (f.source === 'flat') node.append(el('div', { class: 'handle' }));
-      node.title = f.label;
-      ov.append(node);
-      paintOverlay(node, f, b.r);
-    });
-  }
-  highlightOverlay();
-}
-
-function paintOverlay(node, f, r) {
-  const v = S.values[f.id];
-  const filled = hasValue(f, v);
-  node.classList.toggle('filled', filled);
-  [...node.childNodes].forEach((c) => { if (!c.classList || !c.classList.contains('handle')) c.remove(); });
-  let content = null;
-  const fs = Math.max(6, Math.min(11, r.h * 0.68));
-  node.style.fontSize = `calc(var(--k) * ${f.type === 'multiline' ? Math.min(11, Math.max(7, r.h / 3)) : fs}px)`;
-  node.style.padding = '0 calc(var(--k) * 2px)';
-  if (f.type === 'checkbox') content = v ? '✔' : '';
-  else if (f.type === 'radio') content = v != null && v === node.dataset.opt ? '●' : '';
-  else if (v && typeof v === 'object' && v.sig) { content = el('img', { src: v.sig, alt: '' }); }
-  else if (v && typeof v === 'object' && 'text' in v) content = v.text;
-  else if (Array.isArray(v)) content = v.map((x) => displayOf(f, x)).join(', ');
-  else if (f.type === 'select') content = displayOf(f, v);
-  else if (f.isDate && v) content = formatDate(v, f.dateFormat);
-  else content = v || '';
-  if (f.type === 'checkbox' || f.type === 'radio') node.style.fontSize = `calc(var(--k) * ${Math.min(r.w, r.h) * 0.85}px)`;
-  if (content) node.prepend(content.nodeType ? content : document.createTextNode(content));
-}
-
-function updateOverlayFor(f) {
-  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((node) => {
-    const bi = +node.dataset.bi;
-    const r = f.type === 'radio' ? f.options[bi].widget.rect : f.widgets.length ? f.widgets[bi].rect : f.rect;
-    paintOverlay(node, f, r);
-  });
-}
-
-function highlightOverlay() {
-  $$('.ov').forEach((n) => n.classList.toggle('current', n.dataset.id === S.currentId));
-}
-
-async function drawSnippet(f, card) {
-  const sn = card.querySelector('.snippet');
-  if (!sn) return;
-  const page = f.widgets.length ? f.widgets[0].page : f.page;
-  const src = await getPageCanvas(page);
-  const vp = S.pages[page].viewport;
-  const rr = f.type === 'radio' ? f.options.reduce((a, o) => union(a, o.widget.rect), null) : f.rect;
-  const padX = 70, padY = 26;
-  const x = Math.max(0, rr.x - padX), y = Math.max(0, rr.y - padY);
-  const w = Math.min(vp.width - x, rr.w + padX * 2), h = Math.min(vp.height - y, rr.h + padY * 2);
-  const k = src._scale;
-  const c = sn.querySelector('canvas');
-  c.width = Math.round(w * k); c.height = Math.round(h * k);
-  const ctx = c.getContext('2d');
-  ctx.drawImage(src, x * k, y * k, w * k, h * k, 0, 0, c.width, c.height);
-  ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2f5bea';
-  ctx.lineWidth = 2.5 * (k / 1.5);
-  ctx.strokeRect((rr.x - x) * k, (rr.y - y) * k, rr.w * k, rr.h * k);
-  sn.classList.add('has');
-}
-const union = (a, b) => (a ? { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.max(a.x + a.w, b.x + b.w) - Math.min(a.x, b.x), h: Math.max(a.y + a.h, b.y + b.h) - Math.min(a.y, b.y) } : { ...b });
-
-// overlay interactions: tap to jump, drag/resize detected boxes, add new fields
-function setupPageInteractions() {
-  const ov = $('#overlay');
-  let drag = null;
-  const toPt = (e) => {
-    const r = ov.getBoundingClientRect();
-    const vp = S.pages[S.currentPage].viewport;
-    return { x: ((e.clientX - r.left) / r.width) * vp.width, y: ((e.clientY - r.top) / r.height) * vp.height };
-  };
-  ov.addEventListener('pointerdown', (e) => {
-    if (S.addMode) return;
-    const node = e.target.closest('.ov');
-    if (!node) return;
-    const f = fieldById(node.dataset.id);
-    if (!f) return;
-    const resizing = e.target.classList.contains('handle');
-    const canDrag = f.source === 'flat' && (node.classList.contains('current') || !isMobile());
-    drag = { f, node, start: toPt(e), rect: { ...f.rect }, moved: false, resizing, canDrag, id: e.pointerId };
-    if (canDrag) { node.setPointerCapture(e.pointerId); e.preventDefault(); }
-  });
-  ov.addEventListener('pointermove', (e) => {
-    if (!drag || !drag.canDrag || drag.id !== e.pointerId) return;
-    const p = toPt(e);
-    const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
-    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
-    drag.moved = true;
-    const vp = S.pages[S.currentPage].viewport;
-    const r = drag.f.rect;
-    if (drag.resizing) { r.w = Math.max(8, drag.rect.w + dx); r.h = Math.max(6, drag.rect.h + dy); }
-    else { r.x = Math.min(vp.width - 4, Math.max(0, drag.rect.x + dx)); r.y = Math.min(vp.height - 4, Math.max(0, drag.rect.y + dy)); }
-    Object.assign(drag.node.style, { left: (r.x / vp.width) * 100 + '%', top: (r.y / vp.height) * 100 + '%', width: (r.w / vp.width) * 100 + '%', height: (r.h / vp.height) * 100 + '%' });
-    paintOverlay(drag.node, drag.f, r);
-  });
-  const end = (e) => {
-    if (!drag) return;
-    const d = drag;
-    drag = null;
-    if (d.moved) { scheduleDraft(); return; }
-    // a tap: select the field, a second tap jumps to it in the form
-    if (S.currentId === d.f.id || !isMobile()) {
-      setCurrent(d.f.id, 'page');
-      if (isMobile()) setTab('form');
-      focusCard(d.f, d.node.dataset.opt);
-    } else setCurrent(d.f.id, 'page');
-  };
-  ov.addEventListener('pointerup', end);
-  ov.addEventListener('pointercancel', () => { drag = null; });
-  ov.addEventListener('click', (e) => {
-    if (!S.addMode) return;
-    const p = toPt(e);
-    const vp = S.pages[S.currentPage].viewport;
-    S.customCount++;
-    const isCheck = S.addMode === 'checkbox';
-    const rect = isCheck ? { x: p.x - 6, y: p.y - 6, w: 12, h: 12 } : { x: p.x - 4, y: p.y - 9, w: Math.min(200, vp.width - p.x - 10), h: 17 };
-    const f = finishFlatFields([{ type: isCheck ? 'checkbox' : 'text', rect, page: S.currentPage, label: t('addedField', { n: S.customCount }) }])[0];
-    f.custom = true;
-    S.fields.push(f);
-    S.values[f.id] = isCheck ? true : '';
-    sortFields(S.fields);
-    setAddMode(null);
-    renderForm(); renderPagePanel(); updateHeader(); scheduleDraft();
-    setCurrent(f.id, 'page');
-    if (!isCheck) { if (isMobile()) setTab('form'); focusCard(f); }
-  });
-}
-
-function focusCard(f, opt) {
-  const card = $(`.field[data-id="${CSS.escape(f.id)}"]`);
-  if (!card) return;
-  card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  card.classList.remove('flash'); void card.offsetWidth; card.classList.add('flash');
-  const target = opt ? card.querySelector(`input[value="${CSS.escape(opt)}"]`) : card.querySelector('textarea, select, input:not([type=radio]), canvas');
-  setTimeout(() => target && target.focus({ preventScroll: true }), 250);
-}
-
-function setAddMode(mode) {
-  S.addMode = mode;
-  $('#addMode').hidden = !mode;
-  $('#addBtn').hidden = !!mode;
-  $$('[data-add]').forEach((b) => b.classList.toggle('active', b.dataset.add === mode));
-  $('#overlay').classList.toggle('adding', !!mode);
-  $('#pageStage').classList.toggle('adding', !!mode);
-  $('#pagesHint').textContent = mode ? t('addHint') : t('pagesTitle');
-}
-
 // ------------------------------------------------------------------ drafts & memory
 let draftTimer = null;
 function scheduleDraft() { clearTimeout(draftTimer); draftTimer = setTimeout(saveDraftNow, 600); }
 function saveDraftNow() {
   clearTimeout(draftTimer);
   if (!S.fingerprint || !S.fields.length) return;
-  const anyValue = S.fields.some((f) => hasValue(f, S.values[f.id]) && !sameInitial(f));
+  const anyValue = S.fields.some((f) => hasValue(f, S.values[f.id]) && JSON.stringify(S.values[f.id] ?? '') !== JSON.stringify(f.initial ?? ''));
   const flat = S.fields.filter((f) => f.source === 'flat').map((f) => ({ id: f.id, type: f.type, label: f.label, page: f.page, rect: f.rect, custom: !!f.custom, context: f.context, signature: !!f.signature, line: f.line }));
   if (!anyValue && !flat.some((f) => f.custom)) return;
-  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: S.isFlat || flat.length ? flat : null });
-  // keep only the 12 most recent drafts
+  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: flat.length ? flat : null });
   const keys = Object.keys(localStorage).filter((k) => k.startsWith('ff:draft:'));
   if (keys.length > 12) keys.map((k) => [k, store.get(k, {}).t || 0]).sort((a, b) => a[1] - b[1]).slice(0, keys.length - 12).forEach(([k]) => store.del(k));
 }
-function sameInitial(f) { return JSON.stringify(S.values[f.id] ?? '') === JSON.stringify(f.initial ?? ''); }
-
 function maybeOfferRestore() {
   const d = store.get('ff:draft:' + S.fingerprint, null);
   if (!d || !d.values) return;
-  const box = el('div', { class: 'notice info' }, el('div', { class: 'grow' },
-    el('h4', { text: t('restoreTitle') }), el('div', { text: t('restoreText') }),
+  const n = addNotice(el('div', {}, el('h4', { text: t('restoreTitle') }), el('div', { text: t('restoreText') })), 'info', false,
     el('div', { class: 'row' },
-      el('button', { class: 'btn primary small', type: 'button', text: t('restore'), onclick: () => { restoreDraft(d); box.remove(); } }),
-      el('button', { class: 'btn ghost small', type: 'button', text: t('dismiss'), onclick: () => box.remove() }))));
-  $('#notices').prepend(box);
+      el('button', { class: 'btn primary small', type: 'button', text: t('restore'), onclick: () => { restoreDraft(d); n.remove(); } }),
+      el('button', { class: 'btn ghost small', type: 'button', text: t('dismiss'), onclick: () => n.remove() })));
 }
 function restoreDraft(d) {
   if (d.flat) {
     const acro = S.fields.filter((f) => f.source === 'acro');
-    const flat = d.flat.map((x) => {
-      const f = finishFlatFields([{ ...x }])[0];
-      Object.assign(f, { id: x.id, label: x.label, custom: x.custom, context: x.context, signature: x.signature, line: x.line });
-      return f;
-    });
+    const flat = d.flat.map((x) => Object.assign(finishFlatFields([{ ...x }])[0], { id: x.id, label: x.label, custom: x.custom, context: x.context, signature: x.signature, line: x.line }));
     S.fields = sortFields([...acro, ...flat]);
     S.customCount = flat.filter((f) => f.custom).length;
   }
   for (const f of S.fields) if (d.values[f.id] !== undefined) S.values[f.id] = d.values[f.id];
-  renderForm(); renderPagePanel(); updateHeader();
+  closeEditor();
+  renderAllOverlays(); updateHeader(); updateEditBar();
+  if (S.tab === 'list') renderForm();
 }
 function rememberAnswers() {
   const mem = store.get('ff:memory', {});
   for (const f of S.fields) {
-    if (!['text', 'multiline'].includes(f.type) || f.signature || f.isDate) continue;
+    if (!TEXTLIKE.has(f.type) || f.signature || f.isDate) continue;
     const v = S.values[f.id];
     if (typeof v !== 'string' || !v.trim() || v.length > 200) continue;
     const k = normLabel(f.label);
@@ -802,22 +1011,19 @@ function rememberAnswers() {
 }
 
 // ------------------------------------------------------------------ build / preview / save
-function formPages() {
-  return new Set(S.fields.flatMap((f) => (f.widgets.length ? f.widgets.map((w) => w.page) : [f.page])));
-}
-async function build(mode = 'all', flatten = false) {
-  return buildPdf({
-    bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields: S.fields, values: S.values,
-    viewports: S.pages.map((p) => p.viewport), mode, flatten,
-  });
+const formPages = () => new Set(S.fields.flatMap((f) => (f.widgets.length ? f.widgets.map((w) => w.page) : [f.page])));
+function build(mode = 'all', flatten = false) {
+  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields: S.fields, values: S.values, viewports: S.pages.map((p) => p.viewport), mode, flatten });
 }
 
 async function preview() {
+  const mode = $('input[name=saveMode]:checked')?.value || 'all';
+  const flatten = $('#flattenInput').checked;
   busy(t('building'));
   try {
-    const { bytes, warnings } = await build('all', false);
-    const ptask = openPdf(bytes, S.password);
-    const doc = await ptask.promise;
+    const { bytes, warnings } = await build(mode, flatten);
+    const task = openPdf(bytes, S.password);
+    const doc = await task.promise;
     const box = $('#previewPages');
     box.innerHTML = '';
     $('#previewDlg').showModal();
@@ -834,7 +1040,7 @@ async function preview() {
       await page.render({ canvasContext: c.getContext('2d'), canvas: c, viewport: vp, annotationMode: pdfjsLib.AnnotationMode.ENABLE }).promise;
       if (!$('#previewDlg').open) break;
     }
-    ptask.destroy();
+    task.destroy();
   } catch (e) {
     console.error(e);
     busy(false);
@@ -843,12 +1049,13 @@ async function preview() {
 }
 
 async function openSave() {
+  closeEditor();
+  document.activeElement?.blur();
   const missing = S.fields.filter((f) => f.required && !hasValue(f, S.values[f.id]));
   if (missing.length) {
     const ok = await confirmBox(t('missingRequired', { n: missing.length }), t('saveAnyway'), t('goToField'));
-    if (!ok) { if (isMobile()) setTab('form'); setCurrent(missing[0].id, 'page'); focusCard(missing[0]); return; }
+    if (!ok) { setTab('pdf'); activate(missing[0], { nav: true }); return; }
   }
-  const d = $('#saveDlg');
   const base = S.fileName.replace(/\.pdf$/i, '');
   $('#fileNameInput').value = /-(filled|utfylt)$/.test(base) ? base : `${base}-${getLang() === 'nb' ? 'utfylt' : 'filled'}`;
   const total = S.pages.length;
@@ -862,7 +1069,7 @@ async function openSave() {
   if (S.encrypted) $('#flattenInput').checked = false;
   $('#shareBtn').hidden = !(navigator.canShare && navigator.canShare({ files: [new File([new Uint8Array(1)], 'x.pdf', { type: 'application/pdf' })] }));
   updateSaveNotes();
-  d.showModal();
+  $('#saveDlg').showModal();
 }
 function updateSaveNotes() {
   const n = $('#saveNotes');
@@ -902,14 +1109,11 @@ async function doSave(how) {
 
 // ------------------------------------------------------------------ PWA
 function setupPwa() {
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('sw.js?v=' + VERSION).catch(() => {});
-  }
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js?v=' + VERSION).catch(() => {});
   let deferred = null;
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferred = e; $('#installBtn').hidden = false; });
   $('#installBtn').addEventListener('click', async () => { if (!deferred) return; deferred.prompt(); await deferred.userChoice; deferred = null; $('#installBtn').hidden = true; });
   window.addEventListener('appinstalled', () => { $('#installBtn').hidden = true; });
-  // files shared to the installed app (Android share sheet) or opened with it (desktop)
   const params = new URLSearchParams(location.search);
   if (params.has('shared') && 'caches' in window) {
     caches.open('ff-share').then(async (c) => {
@@ -923,9 +1127,7 @@ function setupPwa() {
       loadBytes(buf, name);
     });
   }
-  if ('launchQueue' in window) {
-    window.launchQueue.setConsumer(async (p) => { if (p.files && p.files[0]) loadFile(await p.files[0].getFile()); });
-  }
+  if ('launchQueue' in window) window.launchQueue.setConsumer(async (p) => { if (p.files && p.files[0]) loadFile(await p.files[0].getFile()); });
 }
 
 boot();
