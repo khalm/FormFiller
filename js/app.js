@@ -141,7 +141,11 @@ function boot() {
   $('#markBtn').addEventListener('click', () => setMarkMode(!S.marking));
   S.markStyle = normalizeKind(store.get('ff:markStyle', 'strike1'));
   $('#markStyle').value = S.markStyle;
-  $('#markStyle').addEventListener('change', (e) => { S.markStyle = e.target.value; store.set('ff:markStyle', S.markStyle); maybeWarnErase(); updateCoverUi(); });
+  $('#markStyle').addEventListener('change', (e) => {
+    const kind = e.target.value;
+    if (S.selMark) { changeMarkKind(S.selMark, kind); return; } // restyle the selected mark
+    S.markStyle = kind; store.set('ff:markStyle', kind); maybeWarnErase(); updateCoverUi();
+  });
   S.coverColor = store.get('ff:coverColor', 'auto');
   $$('[data-cover]').forEach((b) => b.addEventListener('click', () => setCoverColor(b.dataset.cover)));
   $('#coverCustom').addEventListener('input', (e) => setCoverColor(e.target.value));
@@ -532,6 +536,7 @@ function applySnapshot(sn) {
   S.marks = structuredClone(sn.marks);
   S.customCount = sn.customCount;
   S.selMark = null;
+  if ($('#markStyle')) { $('#markStyle').value = S.markStyle; $('#markMode').classList.remove('editing'); updateCoverUi(); }
   if (!fieldById(S.currentId)) S.currentId = null;
   renderAllOverlays(); updateHeader(); updateEditBar(); updateTypeHere();
   if (S.tab === 'list') renderForm();
@@ -849,10 +854,10 @@ function setupStage() {
     const page = m.pe.index;
     if (r.w < 4 && r.h < 4) {
       // tap on a mark selects it (tap empty space to deselect)
-      if (m.hit) { S.selMark = m.hit; renderMarks(); return; }
-      if (S.selMark) { S.selMark = null; renderMarks(); return; }
+      if (m.hit) { selectMark(m.hit); return; }
+      if (S.selMark) { selectMark(null); return; }
       markTap(page, m.p1);
-    } else { S.selMark = null; markArea(page, r); }
+    } else { selectMark(null, true); markArea(page, r); }
   };
   stage.addEventListener('pointerup', endMark);
   stage.addEventListener('pointercancel', endMark);
@@ -1017,7 +1022,7 @@ function deleteMark(m) {
   if (!m) return;
   checkpoint();
   S.marks = S.marks.filter((x) => x !== m);
-  if (S.selMark === m) S.selMark = null;
+  if (S.selMark === m) selectMark(null, true);
   renderMarks(); scheduleDraft(); updateTypeHere();
 }
 function markEdited(m) {
@@ -1051,7 +1056,7 @@ function setMarkMode(on) {
     $('#inkPop').hidden = true;
     maybeWarnErase();
   }
-  if (!on) { S.pipette = false; hideLoupe(); S.selMark = null; renderMarks(); }
+  if (!on) { S.pipette = false; hideLoupe(); selectMark(null); }
   $('#markMode').hidden = !on;
   updateTypeHere();
   $('#markBtn').classList.toggle('on', !!on);
@@ -1121,19 +1126,47 @@ function markAreaInner(page, r) {
   addMark(page, { x: x1, y: y1, w: x2 - x1, h: y2 - y1 });
 }
 function setCoverColor(c) {
+  const m = S.selMark;
+  if (m && m.kind === 'cover') { // recolour the selected cover-up
+    checkpoint();
+    m.autoColor = c === 'auto';
+    m.color = m.autoColor ? backgroundAround(m.page, m.rect) : c;
+    renderMarks(); scheduleDraft(); updateCoverUi();
+    return;
+  }
   S.coverColor = c;
   store.set('ff:coverColor', c);
   updateCoverUi();
 }
+// The bar shows the selected mark's style/colour, or the style for new marks when nothing is selected.
+const activeKind = () => (S.selMark ? S.selMark.kind : S.markStyle);
+const activeCover = () => (S.selMark && S.selMark.kind === 'cover' ? (S.selMark.autoColor ? 'auto' : S.selMark.color) : S.coverColor);
+function selectMark(m, quiet) {
+  S.selMark = m;
+  $('#markStyle').value = activeKind();
+  $('#markMode').classList.toggle('editing', !!m);
+  $('#markHint').textContent = m ? t('editingMark') : t('markHint');
+  updateCoverUi();
+  if (!quiet) renderMarks();
+}
+function changeMarkKind(m, kind) {
+  if (m.kind === kind) return;
+  checkpoint();
+  m.kind = kind;
+  if (kind === 'cover' && !m.color) { m.autoColor = !S.coverColor || S.coverColor === 'auto'; m.color = m.autoColor ? backgroundAround(m.page, m.rect) : S.coverColor; }
+  renderMarks(); scheduleDraft(); updateCoverUi();
+  if (kind !== 'strike1' && kind !== 'strike2' && kind !== 'strike3') maybeWarnErase();
+}
 function updateCoverUi() {
-  if (S.markStyle !== 'cover') S.pipette = false;
-  $('#coverColors').hidden = S.markStyle !== 'cover';
+  const kind = activeKind(), col = activeCover();
+  if (kind !== 'cover') S.pipette = false;
+  $('#coverColors').hidden = kind !== 'cover';
   $('#pipetteBtn').classList.toggle('on', !!S.pipette);
   $$('.overlay').forEach((o) => o.classList.toggle('picking', !!S.pipette));
-  const preset = $$('[data-cover]').some((b) => b.dataset.cover === S.coverColor);
-  $$('[data-cover]').forEach((b) => b.classList.toggle('on', b.dataset.cover === S.coverColor));
+  const preset = $$('[data-cover]').some((b) => b.dataset.cover === col);
+  $$('[data-cover]').forEach((b) => b.classList.toggle('on', b.dataset.cover === col));
   $('.cc-pick').classList.toggle('on', !preset);
-  if (!preset && /^#/.test(S.coverColor)) { $('#coverCustom').value = S.coverColor; $('.cc-pick').style.background = S.coverColor; }
+  if (!preset && /^#/.test(col || '')) { $('#coverCustom').value = col; $('.cc-pick').style.background = col; }
   else $('.cc-pick').style.background = '';
 }
 function addMark(page, rect, quiet, annotIds) {
@@ -1146,7 +1179,7 @@ function addMark(page, rect, quiet, annotIds) {
   const mark = { kind, page, rect: r, seed: Math.floor(Math.random() * 1e6) + 1, annots };
   if (kind === 'cover') { mark.autoColor = !S.coverColor || S.coverColor === 'auto'; mark.color = mark.autoColor ? backgroundAround(page, r) : S.coverColor; }
   S.marks.push(mark);
-  S.selMark = null;
+  if (S.selMark) selectMark(null, true);
   if (!quiet) { renderMarks(); scheduleDraft(); }
   updateTypeHere();
 }

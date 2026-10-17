@@ -478,3 +478,6 @@ dialog[open] { animation: pop .2s ease; }
 
 .tool:disabled { opacity: .3; pointer-events: none; }
 @media (max-width: 420px) { .stage-tools { right: 6px; gap: 0; } .tool { min-width: 31px; } .zoom-label { min-width: 40px; font-size: 11.5px; } .tool-sep { margin: 0 1px; } }
+
+#markMode.editing .mark-select select { box-shadow: 0 0 0 2px var(--accent); }
+#markMode.editing .mark-hint { font-weight: 650; }

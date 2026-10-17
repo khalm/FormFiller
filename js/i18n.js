@@ -1,6 +1,7 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    editingMark: 'Mark selected — pick a new style, drag to move.',
     redo: 'Redo',
     removeMark: 'Delete this erase mark',
     typeHere: 'Type here',
@@ -153,6 +154,7 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    editingMark: 'Markering valgt — velg ny stil, dra for å flytte.',
     redo: 'Gjør om',
     removeMark: 'Slett denne utviskingen',
     typeHere: 'Skriv her',
