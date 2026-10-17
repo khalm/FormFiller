@@ -13,7 +13,7 @@ Prefer a simple list of questions instead? Switch to the **List** tab.
 ## What it can do
 
 - **Fillable PDFs** (with real form fields): text, multi-line, checkboxes, radio buttons, dropdowns, lists and date fields. Labels are taken from the field's tooltip or the text printed next to / above / under the field.
-- **Printed-style PDFs** (no real fields): finds blank lines, underscores (`Name: ______`), empty boxes, table cells, checkbox squares and `Label:` blanks automatically. Drag the blue dots on a box to, resize, remove or add fields.
+- **Printed-style PDFs** (no real fields): finds blank lines, underscores (`Name: ______`), empty boxes, table cells, checkbox squares and `Label:` blanks automatically. Drag the blue dots on a box to move or resize it, tap ＋ to add a box, or remove ones you don't need.
 - **Signatures**: draw with your finger, or type instead.
 - **Save options**: entire PDF or only the form pages, optionally **locked** (flattened) so answers can't be changed.
 - **Password-protected and owner-protected PDFs** are supported.
