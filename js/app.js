@@ -522,7 +522,7 @@ function makeEditor(f) {
   let ed;
   if (f.type === 'multiline') ed = el('textarea', { class: 'ov-editor', spellcheck: 'true' });
   else if (f.isDate) ed = el('input', { class: 'ov-editor', type: 'date' });
-  else ed = el('input', { class: 'ov-editor', type: f.inputType || 'text', autocomplete: f.autocomplete || 'off', inputmode: f.inputmode || null, enterkeyhint: 'next', spellcheck: f.autocomplete ? 'false' : null, maxlength: f.maxLen || null });
+  else ed = el('input', { class: 'ov-editor', type: f.inputType === 'email' ? 'email' : 'text', autocomplete: f.autocomplete || 'off', inputmode: keyboardFor(f), enterkeyhint: 'next', spellcheck: f.autocomplete ? 'false' : null, maxlength: f.maxLen || null });
   if (f.type !== 'multiline' && f.maxLen) ed.maxLength = f.maxLen;
   ed.value = text;
   ed.dataset.id = f.id;
@@ -648,6 +648,10 @@ function updateEditBar() {
       setValue(f, s); if (S.editor) S.editor.value = s;
     }, keep));
   }
+  if (isTyped(f) && !f.isDate) {
+    const kb = el('button', { class: 'chip kbd-chip', type: 'button', title: t('switchKeyboard'), 'aria-label': t('switchKeyboard'), text: useNumPad(f) ? 'ABC' : '123', onpointerdown: (e) => e.preventDefault(), onclick: () => toggleKeyboard(f) });
+    slot.prepend(kb);
+  }
   if (f.source === 'merge') {
     slot.append(chip(t('perBox'), f.mode === 'spread', () => setMergeMode(f, 'spread'), keep), chip(t('oneText'), f.mode === 'span', () => setMergeMode(f, 'span'), keep), chip(t('split'), false, () => splitMerged(f)));
   }
@@ -763,6 +767,31 @@ function setAddMode(mode) {
   $$('[data-add]').forEach((b) => b.classList.toggle('active', b.dataset.add === mode));
   $$('.overlay').forEach((o) => o.classList.toggle('adding', !!mode));
   if (mode) closeEditor();
+}
+
+// ------------------------------------------------------------------ keyboard choice
+// Regular keyboard by default; the 123/ABC button switches. If you switch a number box,
+// that choice is remembered for number boxes from then on.
+const isNumberish = (f) => f.inputmode === 'numeric' || f.inputmode === 'tel';
+function useNumPad(f) {
+  if (f.numPad != null) return f.numPad;
+  return isNumberish(f) && store.get('ff:numpad', false) === true;
+}
+function keyboardFor(f) {
+  if (useNumPad(f)) return f.inputmode === 'tel' ? 'tel' : 'numeric';
+  return f.inputType === 'email' ? 'email' : 'text';
+}
+function toggleKeyboard(f) {
+  f.numPad = !useNumPad(f);
+  if (isNumberish(f)) store.set('ff:numpad', f.numPad);
+  const ed = S.editor;
+  if (ed && ed.dataset.id === f.id) {
+    ed.setAttribute('inputmode', keyboardFor(f));
+    // the phone only swaps keyboards when the box is focused again
+    ed.blur();
+    ed.focus({ preventScroll: true });
+  }
+  updateEditBar();
 }
 
 // ------------------------------------------------------------------ select & merge boxes
@@ -1061,8 +1090,8 @@ function fieldCard(f, idx, memory) {
     input = el('input', { class: 'input', type: 'date', id: inputId, value: v || '', oninput: (e) => set(e.target.value) });
   } else {
     input = el('input', {
-      class: 'input', id: inputId, type: f.inputType || 'text', value: typeof v === 'string' ? v : '', list: dl ? dl.id : null,
-      autocomplete: f.autocomplete || (dl ? 'off' : null), inputmode: f.inputmode || null, maxlength: f.maxLen || null, enterkeyhint: 'next',
+      class: 'input', id: inputId, type: f.inputType === 'email' ? 'email' : 'text', value: typeof v === 'string' ? v : '', list: dl ? dl.id : null,
+      autocomplete: f.autocomplete || (dl ? 'off' : null), inputmode: keyboardFor(f), maxlength: f.maxLen || null, enterkeyhint: 'next',
       oninput: (e) => set(e.target.value),
     });
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); focusNextCard(f); } });

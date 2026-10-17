@@ -428,3 +428,5 @@ dialog[open] { animation: pop .2s ease; }
 .ov-editor.spread { background: transparent; color: transparent; caret-color: transparent; box-shadow: none; }
 .add-mode b { font-weight: 700; }
 .add-mode .btn.primary:disabled { opacity: .45; }
+
+.eb-slot .kbd-chip { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em; min-width: 52px; }

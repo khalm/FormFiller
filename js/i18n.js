@@ -1,6 +1,7 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    switchKeyboard: 'Switch between letter and number keyboard',
     mergeBoxes: 'Merge boxes',
     selectHint: 'tap the boxes to join.',
     selectedN: '{n} selected',
@@ -127,6 +128,7 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    switchKeyboard: 'Bytt mellom bokstav- og talltastatur',
     mergeBoxes: 'Slå sammen bokser',
     selectHint: 'trykk på boksene som skal slås sammen.',
     selectedN: '{n} valgt',
