@@ -1130,4 +1130,22 @@ function setupPwa() {
   if ('launchQueue' in window) window.launchQueue.setConsumer(async (p) => { if (p.files && p.files[0]) loadFile(await p.files[0].getFile()); });
 }
 
-boot();
+// If the page and the code come from different versions (an old offline copy), wipe the
+// offline cache and reload once so everything is the same version again.
+async function selfHeal() {
+  const ok = document.getElementById('stage') && document.getElementById('editbar');
+  if (ok) { try { sessionStorage.removeItem('ff:healed'); } catch {} return false; }
+  let tried = false;
+  try { tried = sessionStorage.getItem('ff:healed') === '1'; sessionStorage.setItem('ff:healed', '1'); } catch {}
+  if (tried) return false;
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations?.() || [];
+    await Promise.all(regs.map((r) => r.unregister()));
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((k) => k.startsWith('formfiller-')).map((k) => caches.delete(k)));
+  } catch {}
+  location.reload();
+  return true;
+}
+
+selfHeal().then((reloading) => { if (!reloading) boot(); });

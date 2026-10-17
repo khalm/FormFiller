@@ -1,4 +1,6 @@
 // Service worker: offline support + receiving PDFs from the Android share sheet.
+// App files (html/css/js) are fetched network-first so an update is never mixed with old cached
+// files; the cache is only used when offline. Large libraries in vendor/ are cache-first.
 const VERSION = new URL(location.href).searchParams.get('v') || 'dev';
 const CACHE = 'formfiller-' + VERSION;
 const SHELL = [
@@ -9,10 +11,14 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE)
+    .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith('formfiller-') && k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys()
+    .then((keys) => Promise.all(keys.filter((k) => k.startsWith('formfiller-') && k !== CACHE).map((k) => caches.delete(k))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {
@@ -30,16 +36,26 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  // cache first (fast + offline), refresh in the background
+  const isNav = e.request.mode === 'navigate';
+  const key = isNav ? new Request(new URL('./', self.registration.scope).href) : e.request;
+  const vendor = url.pathname.includes('/vendor/');
+
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    const req = e.request.mode === 'navigate' ? new Request(new URL('./', self.registration.scope).href) : e.request;
-    const cached = await cache.match(req, { ignoreSearch: e.request.mode === 'navigate' });
-    const network = fetch(e.request).then((res) => {
-      if (res.ok && res.type === 'basic') cache.put(req, res.clone());
+    if (vendor) {
+      const hit = await cache.match(key);
+      if (hit) return hit;
+      const res = await fetch(e.request);
+      if (res.ok) cache.put(key, res.clone());
       return res;
-    }).catch(() => null);
-    if (cached) { e.waitUntil(network); return cached; }
-    return (await network) || new Response('Offline', { status: 503 });
+    }
+    try {
+      const res = await fetch(e.request, { cache: 'no-cache' });
+      if (res.ok && res.type === 'basic') cache.put(key, res.clone());
+      return res;
+    } catch {
+      const hit = await cache.match(key, { ignoreSearch: isNav });
+      return hit || new Response('Offline', { status: 503 });
+    }
   })());
 });
