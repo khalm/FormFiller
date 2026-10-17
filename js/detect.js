@@ -617,3 +617,20 @@ export function sortFields(fields) {
     return ra.x - rb.x;
   });
 }
+
+// Word boxes inside a text segment (positions estimated from character widths).
+export function wordBoxes(seg) {
+  const chars = [...seg.str];
+  const total = chars.reduce((a, c) => a + charW(c), 0) || 1;
+  const scale = (seg.x2 - seg.x1) / total;
+  const out = [];
+  let x = seg.x1, start = null, word = '';
+  chars.forEach((c, i) => {
+    const w = charW(c) * scale;
+    if (c === ' ') { if (start != null) { out.push({ x1: start, x2: x, word }); start = null; word = ''; } }
+    else { if (start == null) start = x; word += c; }
+    x += w;
+    if (i === chars.length - 1 && start != null) out.push({ x1: start, x2: x, word });
+  });
+  return out.map((b) => ({ ...b, y1: seg.y1, y2: seg.y2 }));
+}

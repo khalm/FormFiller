@@ -430,3 +430,13 @@ dialog[open] { animation: pop .2s ease; }
 .add-mode .btn.primary:disabled { opacity: .45; }
 
 .eb-slot .kbd-chip { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em; min-width: 52px; }
+
+/* whiteout / strikeout */
+.mk { position: absolute; pointer-events: none; z-index: 1; }
+.mk.white { background: #fff; }
+.mk.strike::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: max(1.5px, calc(var(--k) * 1.1px)); transform: translateY(-50%); background: var(--ink-color, #0f1e52); }
+.overlay.marking { cursor: crosshair; touch-action: none; }
+.overlay.marking .ov { pointer-events: none; opacity: .45; }
+.overlay.marking .mk { outline: 1px dashed rgba(224, 122, 0, .9); }
+.mk-draft { position: absolute; border: 1.5px dashed #e07a00; background: rgba(240, 140, 0, .12); pointer-events: none; z-index: 6; }
+.mark-hint { flex: 1; min-width: 150px; font-size: 13px; opacity: .85; }

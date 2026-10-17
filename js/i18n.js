@@ -1,6 +1,13 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    markUp: 'Cover up / strike out',
+    whiteout: 'Cover up',
+    strikeout: 'Strike out',
+    markHint: 'Tap a word or drag over an area. Tap a mark to remove it.',
+    undo: 'Undo',
+    whiteoutNote: 'Cover up paints over the text with the page’s background colour, but the original text is still inside the file. Don’t rely on it to hide secrets.',
+    marksProtected: 'Cover-ups and strike-outs can’t be added to this protected PDF.',
     switchKeyboard: 'Switch between letter and number keyboard',
     mergeBoxes: 'Merge boxes',
     selectHint: 'tap the boxes to join.',
@@ -128,6 +135,13 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    markUp: 'Overdekk / stryk over',
+    whiteout: 'Overdekk',
+    strikeout: 'Stryk over',
+    markHint: 'Trykk på et ord eller dra over et område. Trykk på en markering for å fjerne den.',
+    undo: 'Angre',
+    whiteoutNote: 'Overdekking maler over teksten med sidens bakgrunnsfarge, men den opprinnelige teksten finnes fortsatt i filen. Ikke bruk det til å skjule hemmeligheter.',
+    marksProtected: 'Overdekking og overstrykning kan ikke legges til i denne beskyttede PDF-en.',
     switchKeyboard: 'Bytt mellom bokstav- og talltastatur',
     mergeBoxes: 'Slå sammen bokser',
     selectHint: 'trykk på boksene som skal slås sammen.',

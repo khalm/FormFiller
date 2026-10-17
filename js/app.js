@@ -1,7 +1,7 @@
 import { VERSION } from './version.js';
 import { t, getLang, setLang, applyStatic } from './i18n.js';
 import { openPdf, pdfjsLib } from './pdf.js';
-import { getSegments, readAcroFields, labelAcroFields, detectFlatFields, finishFlatFields, sortFields } from './detect.js';
+import { getSegments, readAcroFields, labelAcroFields, detectFlatFields, finishFlatFields, sortFields, wordBoxes } from './detect.js';
 import { buildPdf, hasValue, parseDateToIso, formatDate } from './fill.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -33,7 +33,7 @@ const S = {
   bytes: null, fileName: '', password: undefined, encrypted: false,
   task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {},
   currentId: null, addMode: null, fingerprint: '', loaded: false, customCount: 0,
-  zoom: 1, pageEls: [], editor: null, tab: 'pdf', ink: null, selecting: false, selected: new Set(),
+  zoom: 1, pageEls: [], editor: null, tab: 'pdf', ink: null, selecting: false, selected: new Set(), marks: [], marking: null,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -137,6 +137,10 @@ function boot() {
   setupSignatureDialog();
   setupInk();
   $('#selBtn').addEventListener('click', () => setSelectMode(!S.selecting));
+  $('#markBtn').addEventListener('click', () => setMarkMode(S.marking ? null : 'white'));
+  $$('[data-mark]').forEach((b) => b.addEventListener('click', () => setMarkMode(b.dataset.mark)));
+  $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); });
+  $('#markDone').addEventListener('click', () => setMarkMode(null));
   $('#selCancel').addEventListener('click', () => setSelectMode(false));
   $('#selMerge').addEventListener('click', mergeSelected);
   window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 4), { passive: true });
@@ -188,7 +192,7 @@ async function loadBytes(bytes, name) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
   if (!head.includes('%PDF')) { busy(false); toast(t('notPdf'), 'warn'); return; }
   if (S.task) { try { await S.task.destroy(); } catch {} }
-  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentId: null, customCount: 0, addMode: null, zoom: 1, editor: null });
+  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentId: null, customCount: 0, addMode: null, zoom: 1, editor: null, marks: [], marking: null });
 
   const task = openPdf(bytes);
   task.onPassword = async (update, reason) => {
@@ -419,6 +423,7 @@ function boxesOf(f) {
 function renderAllOverlays() {
   for (const pe of S.pageEls) pe.overlay.innerHTML = '';
   for (const f of S.fields) for (const b of boxesOf(f)) addBox(f, b);
+  renderMarks();
   highlightCurrent();
 }
 function addBox(f, b) {
@@ -682,6 +687,7 @@ function setupStage() {
   };
   // tap a box -> edit it
   stage.addEventListener('click', (e) => {
+    if (S.marking) return;
     if (e.target.closest('.ov-editor, .grip, .handle')) return;
     const ov = e.target.closest('.overlay');
     if (!ov) return;
@@ -693,6 +699,38 @@ function setupStage() {
     const f = fieldById(node.dataset.id);
     activate(f, { tap: true, opt: node.dataset.opt || null });
   });
+  // whiteout / strike-out: tap a word or drag an area
+  let mk = null;
+  stage.addEventListener('pointerdown', (e) => {
+    if (!S.marking) return;
+    const ov = e.target.closest('.overlay');
+    if (!ov) return;
+    const pe = S.pageEls[+ov.dataset.page];
+    e.preventDefault();
+    ov.setPointerCapture(e.pointerId);
+    const draft = el('div', { class: 'mk-draft' });
+    pe.overlay.append(draft);
+    mk = { pe, p0: ptOn(pe, e), p1: ptOn(pe, e), draft, id: e.pointerId };
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!mk || mk.id !== e.pointerId) return;
+    mk.p1 = ptOn(mk.pe, e);
+    const vp = S.pages[mk.pe.index].viewport;
+    place(mk.draft, normRect(mk.p0, mk.p1), vp);
+  });
+  const endMark = (e) => {
+    if (!mk || (e && mk.id !== e.pointerId)) return;
+    const m = mk; mk = null;
+    m.draft.remove();
+    if (e && e.type === 'pointercancel') return;
+    const r = normRect(m.p0, m.p1);
+    const page = m.pe.index;
+    if (r.w < 4 && r.h < 4) markTap(page, m.p1);
+    else markArea(page, r);
+  };
+  stage.addEventListener('pointerup', endMark);
+  stage.addEventListener('pointercancel', endMark);
+
   // move / resize detected boxes with their handles
   let drag = null;
   stage.addEventListener('pointerdown', (e) => {
@@ -792,6 +830,98 @@ function toggleKeyboard(f) {
     ed.focus({ preventScroll: true });
   }
   updateEditBar();
+}
+
+// ------------------------------------------------------------------ whiteout / strike-out
+const normRect = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
+let warnedWhiteout = false;
+function setMarkMode(kind) {
+  S.marking = kind;
+  if (kind) {
+    closeEditor(); document.activeElement?.blur(); setAddMode(null);
+    if (S.selecting) setSelectMode(false);
+    $('#inkPop').hidden = true;
+    if (kind === 'white' && !warnedWhiteout) { warnedWhiteout = true; toast(t('whiteoutNote'), '', 6500); }
+  }
+  $('#markMode').hidden = !kind;
+  $('#markBtn').classList.toggle('on', !!kind);
+  $$('[data-mark]').forEach((b) => b.classList.toggle('active', b.dataset.mark === kind));
+  $$('.overlay').forEach((o) => o.classList.toggle('marking', !!kind));
+}
+function textLinesIn(page, r) {
+  return (S.segsByPage[page] || []).filter((s) => s.kind === 'text' && s.x2 > r.x && s.x1 < r.x + r.w && s.y2 > r.y && s.y1 < r.y + r.h);
+}
+function markTap(page, p) {
+  // tapping an existing mark removes it
+  const hit = S.marks.findIndex((m) => m.page === page && p.x >= m.rect.x - 2 && p.x <= m.rect.x + m.rect.w + 2 && p.y >= m.rect.y - 2 && p.y <= m.rect.y + m.rect.h + 2);
+  if (hit >= 0) { S.marks.splice(hit, 1); renderMarks(); scheduleDraft(); return; }
+  const seg = (S.segsByPage[page] || []).find((s) => s.kind === 'text' && p.x >= s.x1 - 2 && p.x <= s.x2 + 2 && p.y >= s.y1 - 2 && p.y <= s.y2 + 2);
+  if (!seg) { toast(t('markHint')); return; }
+  const words = wordBoxes(seg);
+  const w = words.find((b) => p.x >= b.x1 - 2 && p.x <= b.x2 + 2) || words.reduce((a, b) => (Math.abs((b.x1 + b.x2) / 2 - p.x) < Math.abs((a.x1 + a.x2) / 2 - p.x) ? b : a));
+  addMark(page, { x: w.x1, y: w.y1, w: w.x2 - w.x1, h: w.y2 - w.y1 });
+}
+function markArea(page, r) {
+  if (S.marking === 'strike') {
+    const lines = textLinesIn(page, r);
+    if (lines.length) {
+      for (const s of lines) {
+        const x1 = Math.max(s.x1, r.x), x2 = Math.min(s.x2, r.x + r.w);
+        if (x2 - x1 > 1) addMark(page, { x: x1, y: s.y1, w: x2 - x1, h: s.y2 - s.y1 }, true);
+      }
+      renderMarks(); scheduleDraft();
+      return;
+    }
+  }
+  addMark(page, r);
+}
+function addMark(page, rect, quiet) {
+  const pad = S.marking === 'white' ? 1 : 0;
+  const r = { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
+  const mark = { kind: S.marking, page, rect: r };
+  if (S.marking === 'white') mark.color = backgroundAround(page, r);
+  S.marks.push(mark);
+  if (!quiet) { renderMarks(); scheduleDraft(); }
+}
+// The colour of the page right around an area (the most common colour on a ring just
+// outside it), so the cover blends in with coloured or grey backgrounds.
+function backgroundAround(page, r) {
+  const pe = S.pageEls[page];
+  const c = pe?.canvas;
+  if (!c || !c.width || !pe.scale) return '#ffffff';
+  const k = pe.scale;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const ring = 2.5;
+  const x0 = Math.max(0, Math.floor((r.x - ring) * k)), y0 = Math.max(0, Math.floor((r.y - ring) * k));
+  const x1 = Math.min(c.width - 1, Math.ceil((r.x + r.w + ring) * k)), y1 = Math.min(c.height - 1, Math.ceil((r.y + r.h + ring) * k));
+  if (x1 <= x0 || y1 <= y0) return '#ffffff';
+  const d = ctx.getImageData(x0, y0, x1 - x0 + 1, y1 - y0 + 1).data;
+  const W = x1 - x0 + 1, H = y1 - y0 + 1, edge = Math.max(1, Math.round(ring * k * 0.6));
+  const counts = new Map();
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (x >= edge && x < W - edge && y >= edge && y < H - edge) continue; // ring only
+    const i = (y * W + x) * 4;
+    const key = (d[i] >> 3) << 10 | (d[i + 1] >> 3) << 5 | (d[i + 2] >> 3);
+    const e = counts.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+    e.n++; e.r += d[i]; e.g += d[i + 1]; e.b += d[i + 2];
+    counts.set(key, e);
+  }
+  let best = null;
+  for (const e of counts.values()) if (!best || e.n > best.n) best = e;
+  if (!best) return '#ffffff';
+  const hex = (v) => Math.round(v / best.n).toString(16).padStart(2, '0');
+  return '#' + hex(best.r) + hex(best.g) + hex(best.b);
+}
+function renderMarks() {
+  $$('.mk').forEach((n) => n.remove());
+  for (const m of S.marks) {
+    const pe = S.pageEls[m.page];
+    if (!pe) continue;
+    const node = el('div', { class: 'mk ' + m.kind });
+    if (m.kind === 'white') node.style.background = m.color || '#fff';
+    place(node, m.rect, S.pages[m.page].viewport);
+    pe.overlay.prepend(node);
+  }
 }
 
 // ------------------------------------------------------------------ select & merge boxes
@@ -1151,8 +1281,8 @@ function saveDraftNow() {
   const allFlat = S.fields.flatMap((f) => (f.source === 'merge' ? f.parts : [f])).filter((f) => f.source === 'flat');
   const flat = allFlat.map((f) => ({ id: f.id, type: f.type, label: f.label, page: f.page, rect: f.rect, custom: !!f.custom, context: f.context, signature: !!f.signature, line: f.line }));
   const merges = S.fields.filter((f) => f.source === 'merge').map((f) => ({ id: f.id, mode: f.mode, label: f.label, parts: f.parts.map((p) => p.id) }));
-  if (!anyValue && !flat.some((f) => f.custom) && !merges.length) return;
-  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: flat.length ? flat : null, merges });
+  if (!anyValue && !flat.some((f) => f.custom) && !merges.length && !S.marks.length) return;
+  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: flat.length ? flat : null, merges, marks: S.marks });
   const keys = Object.keys(localStorage).filter((k) => k.startsWith('ff:draft:'));
   if (keys.length > 12) keys.map((k) => [k, store.get(k, {}).t || 0]).sort((a, b) => a[1] - b[1]).slice(0, keys.length - 12).forEach(([k]) => store.del(k));
 }
@@ -1171,6 +1301,7 @@ function restoreDraft(d) {
     S.fields = sortFields([...acro, ...flat]);
     S.customCount = flat.filter((f) => f.custom).length;
   }
+  S.marks = Array.isArray(d.marks) ? d.marks : [];
   for (const m of d.merges || []) {
     const parts = m.parts.map(fieldById).filter(Boolean);
     if (parts.length >= 2) mergeFields(parts, { id: m.id, mode: m.mode, label: m.label });
@@ -1212,7 +1343,7 @@ function build(mode = 'all', flatten = false) {
       for (const p of f.parts) if (p.source === 'acro' && v) detach.push(p.name);
     }
   }
-  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields, values, detach, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
+  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields, values, detach, marks: S.marks, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
 }
 
 async function preview() {

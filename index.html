@@ -85,6 +85,7 @@
         <button class="tool" id="zoomIn" data-i18n-aria="zoomIn"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
         <span class="tool-sep"></span>
         <button class="tool" id="selBtn" data-i18n-aria="mergeBoxes"><svg viewBox="0 0 24 24"><rect x="3" y="8" width="7" height="8" rx="1.5" stroke-dasharray="2 2"/><rect x="14" y="8" width="7" height="8" rx="1.5" stroke-dasharray="2 2"/><path d="M10 12h4"/></svg></button>
+        <button class="tool" id="markBtn" data-i18n-aria="markUp"><svg viewBox="0 0 24 24"><path d="M4 20h16"/><path d="M14.5 4.5l5 5L10 19H5v-5z"/><path d="M5 12h9" stroke-dasharray="1.5 2"/></svg></button>
         <button class="tool" id="inkBtn" data-i18n-aria="textColor"><span class="ink-dot" id="inkDot"></span></button>
         <button class="tool" id="addBtn" data-i18n-aria="addField"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M12 10v4M10 12h4"/></svg></button>
       </div>
@@ -92,6 +93,15 @@
         <div class="ink-title" data-i18n="textColor"></div>
         <div class="ink-swatches" id="inkSwatches"></div>
         <label class="ink-custom"><input type="color" id="inkCustom"><span data-i18n="customColor"></span></label>
+      </div>
+      <div class="add-mode" id="markMode" hidden>
+        <div class="seg-group">
+          <button class="seg active" data-mark="white" data-i18n="whiteout"></button>
+          <button class="seg" data-mark="strike" data-i18n="strikeout"></button>
+        </div>
+        <span class="mark-hint" data-i18n="markHint"></span>
+        <button class="btn ghost small" id="markUndo" data-i18n="undo"></button>
+        <button class="btn primary small" id="markDone" data-i18n="done"></button>
       </div>
       <div class="add-mode" id="selMode" hidden>
         <span><b data-i18n="mergeBoxes"></b> · <span data-i18n="selectHint"></span> <span id="selCount"></span></span>
