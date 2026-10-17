@@ -1,6 +1,8 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    redo: 'Redo',
+    removeMark: 'Delete this erase mark',
     typeHere: 'Type here',
     typedOver: 'New text',
     pipette: 'Pick a colour from the page',
@@ -20,7 +22,7 @@ const dict = {
     markUp: 'Cover up / strike out',
     whiteout: 'Cover up',
     strikeout: 'Strike out',
-    markHint: 'Tap a word or drag over an area. Tap a mark to remove it.',
+    markHint: 'Tap a word or drag over an area. Tap a mark to move, resize or delete it.',
     undo: 'Undo',
     whiteoutNote: 'Erasing only changes how the page looks — the original text is still inside the file. Don’t rely on it to hide secrets.',
     marksProtected: 'Erasing can’t be added to this protected PDF.',
@@ -151,6 +153,8 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    redo: 'Gjør om',
+    removeMark: 'Slett denne utviskingen',
     typeHere: 'Skriv her',
     typedOver: 'Ny tekst',
     pipette: 'Hent farge fra siden',
@@ -170,7 +174,7 @@ const dict = {
     markUp: 'Overdekk / stryk over',
     whiteout: 'Overdekk',
     strikeout: 'Stryk over',
-    markHint: 'Trykk på et ord eller dra over et område. Trykk på en markering for å fjerne den.',
+    markHint: 'Trykk på et ord eller dra over et område. Trykk på en markering for å flytte, endre størrelse eller slette den.',
     undo: 'Angre',
     whiteoutNote: 'Utvisking endrer bare hvordan siden ser ut — den opprinnelige teksten finnes fortsatt i filen. Ikke bruk det til å skjule hemmeligheter.',
     marksProtected: 'Utvisking kan ikke legges til i denne beskyttede PDF-en.',

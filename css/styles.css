@@ -467,3 +467,14 @@ dialog[open] { animation: pop .2s ease; }
   display: grid; place-items: end center;
 }
 .loupe span { font: 600 10px/1 ui-monospace, monospace; background: rgba(0,0,0,.65); color: #fff; padding: 2px 4px; border-radius: 4px; margin-bottom: -22px; }
+
+/* editing erase marks */
+.mk.sel { outline: 2px dashed var(--accent); outline-offset: 2px; z-index: 7; }
+.mk-handle, .mk-del { position: absolute; width: 24px; height: 24px; border-radius: 50%; pointer-events: auto; touch-action: none; box-shadow: 0 1px 4px rgba(0,0,0,.35); border: 2px solid #fff; }
+.mk-handle { right: -30px; bottom: -30px; background: var(--accent); cursor: nwse-resize; }
+.mk-del { right: -30px; top: -30px; background: #d23b3b; display: grid; place-items: center; cursor: pointer; }
+.mk-del svg { width: 14px; height: 14px; fill: none; stroke: #fff; stroke-width: 3; stroke-linecap: round; }
+.overlay.marking .mk.sel { cursor: move; }
+
+.tool:disabled { opacity: .3; pointer-events: none; }
+@media (max-width: 420px) { .stage-tools { right: 6px; gap: 0; } .tool { min-width: 31px; } .zoom-label { min-width: 40px; font-size: 11.5px; } .tool-sep { margin: 0 1px; } }

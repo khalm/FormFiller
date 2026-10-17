@@ -147,7 +147,18 @@ function boot() {
   $('#coverCustom').addEventListener('input', (e) => setCoverColor(e.target.value));
   $('#pipetteBtn').addEventListener('click', () => setPipette(!S.pipette));
   updateCoverUi();
-  $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); updateTypeHere(); });
+  $('#markUndo').addEventListener('click', undo);
+  for (const id of ['#undoBtn', '#redoBtn']) $(id).addEventListener('pointerdown', (e) => e.preventDefault());
+  $('#undoBtn').addEventListener('click', undo);
+  $('#redoBtn').addEventListener('click', redo);
+  document.addEventListener('keydown', (e) => {
+    if (!S.loaded || $('#fill').hidden || !(e.ctrlKey || e.metaKey)) return;
+    const typing = document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.activeElement.classList.contains('ov-editor');
+    if (typing) return;
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+    else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); }
+  });
   $('#markType').addEventListener('click', typeOverLastMark);
   $('#markDone').addEventListener('click', () => setMarkMode(null));
   $('#selCancel').addEventListener('click', () => setSelectMode(false));
@@ -253,6 +264,7 @@ async function loadBytes(bytes, name) {
   for (const f of S.fields) S.values[f.id] = f.isDate ? parseDateToIso(f.initial, f.dateFormat) : structuredClone(f.initial);
 
   S.loaded = true;
+  resetHistory();
   busy(false);
   showFill();
   maybeOfferRestore();
@@ -270,6 +282,7 @@ async function scanFlat(existing) {
 }
 
 async function scanMore() {
+  checkpoint();
   const more = await scanFlat(S.fields);
   busy(false);
   if (!more.length) { toast(t('noFieldsTitle')); return; }
@@ -489,7 +502,64 @@ function highlightCurrent() {
 }
 
 // ------------------------------------------------------------------ editing in place
+// ------------------------------------------------------------------ undo / redo
+// Snapshots of everything the user can change. Typing in one box is grouped into one step.
+const H = { undo: [], redo: [], key: null, time: 0, batch: 0 };
+function snapshot() {
+  return {
+    fields: S.fields.map((f) => ({ ref: f, rect: f.rect ? { ...f.rect } : f.rect, label: f.label, mode: f.mode, maxLen: f.maxLen, sigTyped: f.sigTyped, numPad: f.numPad })),
+    values: structuredClone(S.values),
+    marks: structuredClone(S.marks),
+    customCount: S.customCount,
+  };
+}
+function checkpoint(key = null) {
+  if (H.batch || !S.loaded) return;
+  const now = Date.now();
+  if (key && key === H.key && now - H.time < 1500) { H.time = now; return; }
+  H.undo.push(snapshot());
+  if (H.undo.length > 150) H.undo.shift();
+  H.redo = [];
+  H.key = key; H.time = now;
+  updateUndoButtons();
+}
+function batch(fn) { checkpoint(); H.batch++; try { return fn(); } finally { H.batch--; } }
+function applySnapshot(sn) {
+  closeEditor();
+  document.activeElement?.blur();
+  S.fields = sn.fields.map((x) => Object.assign(x.ref, { rect: x.rect, label: x.label, mode: x.mode, maxLen: x.maxLen, sigTyped: x.sigTyped, numPad: x.numPad }));
+  S.values = structuredClone(sn.values);
+  S.marks = structuredClone(sn.marks);
+  S.customCount = sn.customCount;
+  S.selMark = null;
+  if (!fieldById(S.currentId)) S.currentId = null;
+  renderAllOverlays(); updateHeader(); updateEditBar(); updateTypeHere();
+  if (S.tab === 'list') renderForm();
+  scheduleDraft();
+}
+function undo() {
+  if (!H.undo.length) return;
+  H.redo.push(snapshot());
+  applySnapshot(H.undo.pop());
+  H.key = null;
+  updateUndoButtons();
+}
+function redo() {
+  if (!H.redo.length) return;
+  H.undo.push(snapshot());
+  applySnapshot(H.redo.pop());
+  H.key = null;
+  updateUndoButtons();
+}
+function resetHistory() { H.undo = []; H.redo = []; H.key = null; updateUndoButtons(); }
+function updateUndoButtons() {
+  $('#undoBtn').disabled = !H.undo.length;
+  $('#redoBtn').disabled = !H.redo.length;
+  const mu = $('#markUndo'); if (mu) mu.disabled = !H.undo.length;
+}
+
 function setValue(f, v) {
+  checkpoint(typeof v === 'string' && isTyped(f) ? 'v:' + f.id : (v && typeof v === 'object' && 'text' in v ? 'v:' + f.id : null));
   S.values[f.id] = v;
   repaint(f);
   updateHeader();
@@ -684,6 +754,7 @@ function updateEditBar() {
 }
 
 function removeField(f) {
+  checkpoint();
   const i = S.fields.indexOf(f);
   if (S.currentId === f.id) closeEditor();
   S.fields = S.fields.filter((x) => x !== f);
@@ -735,9 +806,16 @@ function setupStage() {
     e.preventDefault();
     if (S.pipette) { ov.setPointerCapture(e.pointerId); mk = { pipette: true, pe, id: e.pointerId, draft: { remove() {} } }; showLoupe(pe, e); return; }
     ov.setPointerCapture(e.pointerId);
+    const p = ptOn(pe, e);
+    const none = { remove() {} };
+    // editing an existing mark: corner handle resizes, dragging the selected mark moves it
+    if (e.target.closest('.mk-del')) { mk = null; deleteMark(S.selMark); return; }
+    if (e.target.closest('.mk-handle') && S.selMark) { mk = { edit: 'resize', mark: S.selMark, pe, p0: p, p1: p, rect: { ...S.selMark.rect }, draft: none, id: e.pointerId }; return; }
+    const hit = markAt(pe.index, p);
+    if (hit && hit === S.selMark) { mk = { edit: 'move', mark: hit, pe, p0: p, p1: p, rect: { ...hit.rect }, draft: none, id: e.pointerId }; return; }
     const draft = el('div', { class: 'mk-draft' });
     pe.overlay.append(draft);
-    mk = { pe, p0: ptOn(pe, e), p1: ptOn(pe, e), draft, id: e.pointerId };
+    mk = { pe, p0: p, p1: p, draft, id: e.pointerId, hit };
   });
   stage.addEventListener('pointermove', (e) => {
     if (!mk || mk.id !== e.pointerId) return;
@@ -745,6 +823,14 @@ function setupStage() {
     if (mk.pipette) { showLoupe(mk.pe, e); return; }
     mk.p1 = ptOn(mk.pe, e);
     const vp = S.pages[mk.pe.index].viewport;
+    if (mk.edit) {
+      if (!mk.moved) { mk.moved = true; checkpoint(); }
+      const dx = mk.p1.x - mk.p0.x, dy = mk.p1.y - mk.p0.y, r = mk.mark.rect;
+      if (mk.edit === 'move') { r.x = Math.max(-r.w / 2, Math.min(vp.width - r.w / 2, mk.rect.x + dx)); r.y = Math.max(-r.h / 2, Math.min(vp.height - r.h / 2, mk.rect.y + dy)); }
+      else { r.w = Math.max(3, mk.rect.w + dx); r.h = Math.max(2, mk.rect.h + dy); }
+      renderMarks();
+      return;
+    }
     place(mk.draft, normRect(mk.p0, mk.p1), vp);
   });
   const endMark = (e) => {
@@ -758,10 +844,15 @@ function setupStage() {
       if (c) { setCoverColor(c); S.pipette = false; updateCoverUi(); toast(t('colorPicked')); }
       return;
     }
+    if (m.edit) { markEdited(m.mark); return; }
     const r = normRect(m.p0, m.p1);
     const page = m.pe.index;
-    if (r.w < 4 && r.h < 4) markTap(page, m.p1);
-    else markArea(page, r);
+    if (r.w < 4 && r.h < 4) {
+      // tap on a mark selects it (tap empty space to deselect)
+      if (m.hit) { S.selMark = m.hit; renderMarks(); return; }
+      if (S.selMark) { S.selMark = null; renderMarks(); return; }
+      markTap(page, m.p1);
+    } else { S.selMark = null; markArea(page, r); }
   };
   stage.addEventListener('pointerup', endMark);
   stage.addEventListener('pointercancel', endMark);
@@ -776,6 +867,7 @@ function setupStage() {
     const pe = S.pageEls[f.page];
     e.preventDefault();
     h.setPointerCapture(e.pointerId);
+    checkpoint();
     drag = { f, node, pe, start: ptOn(pe, e), rect: { ...f.rect }, resize: h.classList.contains('handle'), id: e.pointerId };
   });
   stage.addEventListener('pointermove', (e) => {
@@ -826,6 +918,7 @@ function setupStage() {
 }
 
 function addFieldAt(pe, p) {
+  checkpoint();
   const vp = S.pages[pe.index].viewport;
   S.customCount++;
   const isCheck = S.addMode === 'checkbox';
@@ -915,10 +1008,29 @@ let warnedErase = false;
 function maybeWarnErase() {
   if (!warnedErase && ['cover', 'blur', 'scribble', 'hatch'].includes(S.markStyle)) { warnedErase = true; toast(t('whiteoutNote'), '', 6500); }
 }
+function markAt(page, p) {
+  let hit = null;
+  for (const m of S.marks) if (m.page === page && p.x >= m.rect.x - 3 && p.x <= m.rect.x + m.rect.w + 3 && p.y >= m.rect.y - 3 && p.y <= m.rect.y + m.rect.h + 3) hit = m; // topmost
+  return hit;
+}
+function deleteMark(m) {
+  if (!m) return;
+  checkpoint();
+  S.marks = S.marks.filter((x) => x !== m);
+  if (S.selMark === m) S.selMark = null;
+  renderMarks(); scheduleDraft(); updateTypeHere();
+}
+function markEdited(m) {
+  // follow the new spot: background colour (if automatic) and anything added on top that it now covers
+  if (m.kind === 'cover' && m.autoColor) m.color = backgroundAround(m.page, m.rect);
+  m.annots = annotsIn(m.page, m.rect).map((a) => a.id);
+  renderMarks(); scheduleDraft();
+}
 function updateTypeHere() { const b = $('#markType'); if (b) b.disabled = !S.marks.length; }
 function typeOverLastMark() {
   const m = S.marks[S.marks.length - 1];
   if (!m) return;
+  checkpoint();
   setMarkMode(false);
   S.customCount++;
   const rect = { x: m.rect.x, y: m.rect.y, w: Math.max(m.rect.w, 30), h: Math.max(m.rect.h, 12) };
@@ -939,7 +1051,7 @@ function setMarkMode(on) {
     $('#inkPop').hidden = true;
     maybeWarnErase();
   }
-  if (!on) { S.pipette = false; hideLoupe(); }
+  if (!on) { S.pipette = false; hideLoupe(); S.selMark = null; renderMarks(); }
   $('#markMode').hidden = !on;
   updateTypeHere();
   $('#markBtn').classList.toggle('on', !!on);
@@ -952,6 +1064,10 @@ const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h
 function annotsIn(page, r) { return S.annots.filter((a) => a.page === page && overlaps(a.rect, r)); }
 // erase something another app added: strike styles get one line per text line, others cover it all
 function markAnnot(a) {
+  checkpoint(); H.batch++;
+  try { markAnnotInner(a); } finally { H.batch--; }
+}
+function markAnnotInner(a) {
   if (S.markStyle.startsWith('strike')) {
     const lh = a.rect.h / a.lines;
     const lines = a.text ? a.text.split('\n') : [];
@@ -965,10 +1081,6 @@ function markAnnot(a) {
   } else addMark(a.page, a.rect, false, [a.id]);
 }
 function markTap(page, p) {
-  // tapping an existing mark removes it
-  let hit = -1;
-  S.marks.forEach((m, i) => { if (m.page === page && p.x >= m.rect.x - 2 && p.x <= m.rect.x + m.rect.w + 2 && p.y >= m.rect.y - 2 && p.y <= m.rect.y + m.rect.h + 2) hit = i; });
-  if (hit >= 0) { S.marks.splice(hit, 1); renderMarks(); scheduleDraft(); return; }
   const an = S.annots.find((a) => a.page === page && p.x >= a.rect.x - 2 && p.x <= a.rect.x + a.rect.w + 2 && p.y >= a.rect.y - 2 && p.y <= a.rect.y + a.rect.h + 2);
   if (an) { markAnnot(an); return; }
   const seg = (S.segsByPage[page] || []).find((s) => s.kind === 'text' && p.x >= s.x1 - 2 && p.x <= s.x2 + 2 && p.y >= s.y1 - 2 && p.y <= s.y2 + 2);
@@ -978,6 +1090,10 @@ function markTap(page, p) {
   addMark(page, { x: w.x1, y: w.y1, w: w.x2 - w.x1, h: w.y2 - w.y1 });
 }
 function markArea(page, r) {
+  checkpoint(); H.batch++;
+  try { markAreaInner(page, r); } finally { H.batch--; }
+}
+function markAreaInner(page, r) {
   const touched = annotsIn(page, r);
   if (S.markStyle.startsWith('strike') && touched.length && !textLinesIn(page, r).length) { touched.forEach(markAnnot); return; }
   // line styles follow the text lines inside the dragged area
@@ -1021,14 +1137,16 @@ function updateCoverUi() {
   else $('.cc-pick').style.background = '';
 }
 function addMark(page, rect, quiet, annotIds) {
+  checkpoint();
   const kind = S.markStyle;
   const pad = kind === 'cover' || kind === 'blur' ? 1 : 0;
   const r = { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
   // added-on-top items under this mark get merged into the page when saving, so the mark can cover them
   const annots = annotIds || annotsIn(page, r).map((a) => a.id);
   const mark = { kind, page, rect: r, seed: Math.floor(Math.random() * 1e6) + 1, annots };
-  if (kind === 'cover') mark.color = S.coverColor && S.coverColor !== 'auto' ? S.coverColor : backgroundAround(page, r);
+  if (kind === 'cover') { mark.autoColor = !S.coverColor || S.coverColor === 'auto'; mark.color = mark.autoColor ? backgroundAround(page, r) : S.coverColor; }
   S.marks.push(mark);
+  S.selMark = null;
   if (!quiet) { renderMarks(); scheduleDraft(); }
   updateTypeHere();
 }
@@ -1069,8 +1187,9 @@ function renderMarks() {
     const pe = S.pageEls[m.page];
     if (!pe) continue;
     const r = m.rect;
-    const node = el('div', { class: 'mk ' + m.kind });
+    const node = el('div', { class: 'mk ' + m.kind + (m === S.selMark && S.marking ? ' sel' : '') });
     place(node, r, S.pages[m.page].viewport);
+    if (m === S.selMark && S.marking) node.append(el('div', { class: 'mk-handle' }), el('div', { class: 'mk-del', title: t('removeMark'), 'aria-label': t('removeMark') }, svgIcon('<path d="M7 7l10 10M17 7L7 17"/>')));
     if (m.kind === 'cover') node.style.background = m.color || '#fff';
     else if (m.kind === 'blur') node.style.setProperty('--br', Math.max(1.5, Math.min(r.h, r.w) * 0.22) + 'px');
     else {
@@ -1147,6 +1266,7 @@ function updateSelBar() {
   $('#selMerge').disabled = S.selected.size < 2;
 }
 function mergeSelected() {
+  checkpoint();
   const parts = [...S.selected].map(fieldById).filter(Boolean);
   if (parts.length < 2) return;
   // a merged box can itself be merged again: flatten into its parts
@@ -1200,6 +1320,7 @@ function inputHintsFor(label) {
 }
 function setMergeMode(f, mode) {
   if (f.mode === mode) return;
+  checkpoint();
   closeEditor();
   f.mode = mode;
   f.maxLen = mode === 'spread' ? f.parts.length : 0;
@@ -1210,6 +1331,7 @@ function setMergeMode(f, mode) {
   activate(f, { nav: true });
 }
 function splitMerged(f) {
+  checkpoint();
   closeEditor();
   const v = typeof S.values[f.id] === 'string' ? S.values[f.id] : '';
   const chars = [...v];
@@ -1490,6 +1612,7 @@ function maybeOfferRestore() {
       el('button', { class: 'btn ghost small', type: 'button', text: t('dismiss'), onclick: () => n.remove() })));
 }
 function restoreDraft(d) {
+  checkpoint();
   if (d.flat) {
     const acro = S.fields.filter((f) => f.source === 'acro');
     const flat = d.flat.map((x) => Object.assign(finishFlatFields([{ ...x }])[0], { id: x.id, label: x.label, custom: x.custom, context: x.context, signature: x.signature, line: x.line }));
