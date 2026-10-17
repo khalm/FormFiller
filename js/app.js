@@ -33,7 +33,7 @@ const S = {
   bytes: null, fileName: '', password: undefined, encrypted: false,
   task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {},
   currentId: null, addMode: null, fingerprint: '', loaded: false, customCount: 0,
-  zoom: 1, pageEls: [], editor: null, tab: 'pdf', ink: null,
+  zoom: 1, pageEls: [], editor: null, tab: 'pdf', ink: null, selecting: false, selected: new Set(),
 };
 
 // ------------------------------------------------------------------ helpers
@@ -136,6 +136,9 @@ function boot() {
   setupStage();
   setupSignatureDialog();
   setupInk();
+  $('#selBtn').addEventListener('click', () => setSelectMode(!S.selecting));
+  $('#selCancel').addEventListener('click', () => setSelectMode(false));
+  $('#selMerge').addEventListener('click', mergeSelected);
   window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 4), { passive: true });
   window.addEventListener('popstate', () => { if (S.loaded && !$('#fill').hidden) goHome(true); });
   let lastW = innerWidth;
@@ -408,6 +411,7 @@ async function renderPage(pe, scale) {
 
 // ------------------------------------------------------------------ boxes on the pages
 function boxesOf(f) {
+  if (f.source === 'merge' && f.mode === 'spread') return f.parts.map((p, i) => ({ r: fieldRect(p), p: f.page, i }));
   if (f.type === 'radio') return f.options.map((o, i) => ({ r: o.widget.rect, p: o.widget.page, opt: o.value, i }));
   if (f.widgets.length) return f.widgets.map((w, i) => ({ r: w.rect, p: w.page, i }));
   return [{ r: f.rect, p: f.page, i: 0 }];
@@ -421,7 +425,7 @@ function addBox(f, b) {
   const pe = S.pageEls[b.p];
   if (!pe) return;
   const vp = S.pages[b.p].viewport;
-  const node = el('div', { class: `ov ${f.source === 'flat' ? 'flat' : ''} ${f.type === 'multiline' ? 'multi' : ''} ${f.type === 'checkbox' || f.type === 'radio' ? 'check' : ''}`, dataset: { id: f.id, opt: b.opt ?? '', bi: b.i }, title: f.label });
+  const node = el('div', { class: `ov ${f.source === 'flat' ? 'flat' : ''} ${f.source === 'merge' ? 'merged' : ''} ${S.selected.has(f.id) ? 'selected' : ''} ${f.type === 'multiline' ? 'multi' : ''} ${f.type === 'checkbox' || f.type === 'radio' ? 'check' : ''}`, dataset: { id: f.id, opt: b.opt ?? '', bi: b.i }, title: f.label });
   place(node, b.r, vp);
   if (f.source === 'flat') node.append(el('div', { class: 'grip' }, svgIcon(ICONS.move)), el('div', { class: 'handle' }));
   pe.overlay.append(node);
@@ -444,6 +448,7 @@ function paintBox(node, f, r) {
   else if (Array.isArray(v)) content = v.map((x) => displayOf(f, x)).join(', ');
   else if (f.type === 'select' || f.type === 'list') content = displayOf(f, v);
   else if (f.isDate && v) content = formatDate(v, f.dateFormat);
+  else if (f.source === 'merge' && f.mode === 'spread') { content = [...(v || '')][+node.dataset.bi] || ''; node.style.justifyContent = 'center'; }
   else content = v || '';
   if (f.type === 'checkbox' || f.type === 'radio') node.style.fontSize = `calc(var(--k) * ${Math.min(r.w, r.h) * 0.85}px)`;
   if (content) node.prepend(content.nodeType ? content : document.createTextNode(content));
@@ -524,6 +529,16 @@ function makeEditor(f) {
   ed.setAttribute('aria-label', f.label);
   place(ed, r, vp);
   ed.style.fontSize = `calc(var(--k) * ${fontPt(f, r)}px)`;
+  if (f.source === 'merge' && f.mode === 'spread') {
+    ed.classList.add('spread');
+    ed.maxLength = f.parts.length;
+    ed.setAttribute('autocapitalize', 'characters');
+    const cursor = () => $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => n.classList.toggle('cursor', +n.dataset.bi === Math.min([...ed.value].length, f.parts.length - 1)));
+    ed.addEventListener('input', cursor);
+    ed.addEventListener('focus', cursor);
+    ed.addEventListener('blur', () => $$('.ov.cursor').forEach((n) => n.classList.remove('cursor')));
+    requestAnimationFrame(cursor);
+  }
   ed.addEventListener('input', () => setValue(f, f.signature ? { text: ed.value } : ed.value));
   ed.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && f.type !== 'multiline') { e.preventDefault(); step(1); }
@@ -543,7 +558,7 @@ function makeEditor(f) {
   pe.overlay.append(ed);
   S.editor = ed;
   // hide the box's own preview text underneath
-  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => { [...n.childNodes].forEach((c) => { if (c.nodeType === 3 || c.tagName === 'IMG') c.remove(); }); });
+  if (!(f.source === 'merge' && f.mode === 'spread')) $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => { [...n.childNodes].forEach((c) => { if (c.nodeType === 3 || c.tagName === 'IMG') c.remove(); }); });
   return ed;
 }
 
@@ -633,6 +648,9 @@ function updateEditBar() {
       setValue(f, s); if (S.editor) S.editor.value = s;
     }, keep));
   }
+  if (f.source === 'merge') {
+    slot.append(chip(t('perBox'), f.mode === 'spread', () => setMergeMode(f, 'spread'), keep), chip(t('oneText'), f.mode === 'span', () => setMergeMode(f, 'span'), keep), chip(t('split'), false, () => splitMerged(f)));
+  }
   if (f.source === 'flat') slot.append(el('button', { class: 'mini-btn', type: 'button', title: t('removeField'), 'aria-label': t('removeField'), onpointerdown: (e) => e.preventDefault(), onclick: () => removeField(f) }, svgIcon(ICONS.trash)));
 }
 
@@ -666,6 +684,7 @@ function setupStage() {
     const pe = S.pageEls[+ov.dataset.page];
     if (S.addMode) { addFieldAt(pe, ptOn(pe, e)); return; }
     const node = e.target.closest('.ov');
+    if (S.selecting) { if (node) toggleSelect(fieldById(node.dataset.id)); return; }
     if (!node) { if (S.editor) { closeEditor(); document.activeElement?.blur(); } return; }
     const f = fieldById(node.dataset.id);
     activate(f, { tap: true, opt: node.dataset.opt || null });
@@ -744,6 +763,109 @@ function setAddMode(mode) {
   $$('[data-add]').forEach((b) => b.classList.toggle('active', b.dataset.add === mode));
   $$('.overlay').forEach((o) => o.classList.toggle('adding', !!mode));
   if (mode) closeEditor();
+}
+
+// ------------------------------------------------------------------ select & merge boxes
+const MERGEABLE = new Set(['text', 'multiline']);
+function setSelectMode(on) {
+  S.selecting = on;
+  S.selected.clear();
+  if (on) { closeEditor(); document.activeElement?.blur(); setAddMode(null); $('#inkPop').hidden = true; }
+  $('#selBtn').classList.toggle('on', on);
+  $('#selMode').hidden = !on;
+  $$('.ov.selected').forEach((n) => n.classList.remove('selected'));
+  updateSelBar();
+}
+function toggleSelect(f) {
+  if (!f) return;
+  if (!MERGEABLE.has(f.type) || f.signature) { toast(t('onlyTextMerge')); return; }
+  if (S.selected.has(f.id)) S.selected.delete(f.id);
+  else {
+    const first = fieldById([...S.selected][0]);
+    if (first && fieldPage(first) !== fieldPage(f)) { toast(t('samePageMerge')); return; }
+    S.selected.add(f.id);
+  }
+  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => n.classList.toggle('selected', S.selected.has(f.id)));
+  updateSelBar();
+}
+function updateSelBar() {
+  $('#selCount').textContent = t('selectedN', { n: S.selected.size });
+  $('#selMerge').disabled = S.selected.size < 2;
+}
+function mergeSelected() {
+  const parts = [...S.selected].map(fieldById).filter(Boolean);
+  if (parts.length < 2) return;
+  // a merged box can itself be merged again: flatten into its parts
+  const flatParts = parts.flatMap((p) => (p.source === 'merge' ? p.parts : [p]));
+  const oldValues = parts.map((p) => S.values[p.id]).filter((v) => typeof v === 'string' && v.trim());
+  for (const p of parts) if (p.source === 'merge') { S.fields = S.fields.filter((x) => x !== p); delete S.values[p.id]; }
+  const m = mergeFields(flatParts.filter((p) => !parts.includes(p) || p.source !== 'merge'), {});
+  setSelectMode(false);
+  if (!m) return;
+  S.values[m.id] = m.mode === 'spread' ? oldValues.join('').replace(/\s+/g, '') : oldValues.join(' ');
+  renderAllOverlays(); updateHeader(); scheduleDraft();
+  if (S.tab === 'list') renderForm();
+  activate(m, { nav: true });
+  toast(t('merged'));
+}
+function mergeFields(parts, opt) {
+  parts = sortFields([...parts]);
+  const rects = parts.map(fieldRect);
+  const page = fieldPage(parts[0]);
+  const x1 = Math.min(...rects.map((r) => r.x)), y1 = Math.min(...rects.map((r) => r.y));
+  const x2 = Math.max(...rects.map((r) => r.x + r.w)), y2 = Math.max(...rects.map((r) => r.y + r.h));
+  const maxH = Math.max(...rects.map((r) => r.h));
+  const cys = rects.map((r) => r.y + r.h / 2);
+  const sameRow = Math.max(...cys) - Math.min(...cys) < maxH * 0.5;
+  const small = rects.every((r) => r.w <= r.h * 2.4) || parts.every((p) => p.maxLen === 1 || p.comb);
+  const firstIdx = Math.min(...parts.map((p) => S.fields.indexOf(p)).filter((i) => i >= 0));
+  const m = {
+    id: opt.id || 'merge:' + Math.random().toString(36).slice(2, 9),
+    source: 'merge', parts, page,
+    mode: opt.mode || (sameRow && small ? 'spread' : 'span'),
+    type: !sameRow && (y2 - y1) > maxH * 1.6 ? 'multiline' : 'text',
+    label: opt.label || parts[0].label.replace(/\s*\((row|rad) \d+\)$/, ''),
+    rect: { x: x1, y: y1, w: x2 - x1, h: y2 - y1 },
+    widgets: [], options: [], required: parts.some((p) => p.required), initial: '', inputType: 'text',
+  };
+  if (m.mode === 'spread') m.maxLen = parts.length;
+  const h = inputHintsFor(m.label);
+  Object.assign(m, h);
+  S.fields = S.fields.filter((f) => !parts.includes(f));
+  S.fields.splice(Math.min(firstIdx, S.fields.length), 0, m);
+  for (const p of parts) delete S.values[p.id];
+  S.values[m.id] = '';
+  return m;
+}
+function inputHintsFor(label) {
+  const l = (label || '').toLowerCase();
+  if (/e-?mail|e-?post/.test(l)) return { inputType: 'email', inputmode: 'email', autocomplete: 'email' };
+  if (/phone|telefon|tlf|mobil/.test(l)) return { inputType: 'tel', inputmode: 'tel', autocomplete: 'tel' };
+  if (/nummer|number|\bnr\b|n°|postn|zip|konto|fødselsn|personn/.test(l)) return { inputmode: 'numeric' };
+  return {};
+}
+function setMergeMode(f, mode) {
+  if (f.mode === mode) return;
+  closeEditor();
+  f.mode = mode;
+  f.maxLen = mode === 'spread' ? f.parts.length : 0;
+  if (mode === 'spread') { const v = S.values[f.id] || ''; S.values[f.id] = [...v.replace(/\s+/g, '')].slice(0, f.parts.length).join(''); }
+  $$(`.ov[data-id="${CSS.escape(f.id)}"]`).forEach((n) => n.remove());
+  for (const b of boxesOf(f)) addBox(f, b);
+  scheduleDraft();
+  activate(f, { nav: true });
+}
+function splitMerged(f) {
+  closeEditor();
+  const v = typeof S.values[f.id] === 'string' ? S.values[f.id] : '';
+  const chars = [...v];
+  const i = S.fields.indexOf(f);
+  S.fields.splice(i, 1, ...f.parts);
+  delete S.values[f.id];
+  f.parts.forEach((p, k) => { S.values[p.id] = f.mode === 'spread' ? (chars[k] || '') : (k === 0 ? v : (p.source === 'acro' ? p.initial : '')); });
+  renderAllOverlays(); updateHeader(); scheduleDraft();
+  if (S.tab === 'list') renderForm();
+  activate(f.parts[0], { nav: true });
 }
 
 // ------------------------------------------------------------------ text colour
@@ -997,9 +1119,11 @@ function saveDraftNow() {
   clearTimeout(draftTimer);
   if (!S.fingerprint || !S.fields.length) return;
   const anyValue = S.fields.some((f) => hasValue(f, S.values[f.id]) && JSON.stringify(S.values[f.id] ?? '') !== JSON.stringify(f.initial ?? ''));
-  const flat = S.fields.filter((f) => f.source === 'flat').map((f) => ({ id: f.id, type: f.type, label: f.label, page: f.page, rect: f.rect, custom: !!f.custom, context: f.context, signature: !!f.signature, line: f.line }));
-  if (!anyValue && !flat.some((f) => f.custom)) return;
-  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: flat.length ? flat : null });
+  const allFlat = S.fields.flatMap((f) => (f.source === 'merge' ? f.parts : [f])).filter((f) => f.source === 'flat');
+  const flat = allFlat.map((f) => ({ id: f.id, type: f.type, label: f.label, page: f.page, rect: f.rect, custom: !!f.custom, context: f.context, signature: !!f.signature, line: f.line }));
+  const merges = S.fields.filter((f) => f.source === 'merge').map((f) => ({ id: f.id, mode: f.mode, label: f.label, parts: f.parts.map((p) => p.id) }));
+  if (!anyValue && !flat.some((f) => f.custom) && !merges.length) return;
+  store.set('ff:draft:' + S.fingerprint, { t: Date.now(), values: S.values, flat: flat.length ? flat : null, merges });
   const keys = Object.keys(localStorage).filter((k) => k.startsWith('ff:draft:'));
   if (keys.length > 12) keys.map((k) => [k, store.get(k, {}).t || 0]).sort((a, b) => a[1] - b[1]).slice(0, keys.length - 12).forEach(([k]) => store.del(k));
 }
@@ -1017,6 +1141,10 @@ function restoreDraft(d) {
     const flat = d.flat.map((x) => Object.assign(finishFlatFields([{ ...x }])[0], { id: x.id, label: x.label, custom: x.custom, context: x.context, signature: x.signature, line: x.line }));
     S.fields = sortFields([...acro, ...flat]);
     S.customCount = flat.filter((f) => f.custom).length;
+  }
+  for (const m of d.merges || []) {
+    const parts = m.parts.map(fieldById).filter(Boolean);
+    if (parts.length >= 2) mergeFields(parts, { id: m.id, mode: m.mode, label: m.label });
   }
   for (const f of S.fields) if (d.values[f.id] !== undefined) S.values[f.id] = d.values[f.id];
   closeEditor();
@@ -1041,7 +1169,21 @@ function rememberAnswers() {
 // ------------------------------------------------------------------ build / preview / save
 const formPages = () => new Set(S.fields.flatMap((f) => (f.widgets.length ? f.widgets.map((w) => w.page) : [f.page])));
 function build(mode = 'all', flatten = false) {
-  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields: S.fields, values: S.values, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
+  // merged boxes are turned back into plain fields for the PDF writer
+  const fields = [], values = {}, detach = [];
+  for (const f of S.fields) {
+    if (f.source !== 'merge') { fields.push(f); values[f.id] = S.values[f.id]; continue; }
+    const v = typeof S.values[f.id] === 'string' ? S.values[f.id] : '';
+    if (f.mode === 'spread') {
+      const chars = [...v];
+      f.parts.forEach((p, i) => { fields.push({ ...p, center: true }); values[p.id] = chars[i] ?? (p.source === 'acro' ? p.initial : ''); });
+    } else {
+      fields.push({ id: f.id, source: 'flat', type: f.type, label: f.label, page: f.page, rect: f.rect, widgets: [], options: [], line: false, initial: '' });
+      values[f.id] = v;
+      for (const p of f.parts) if (p.source === 'acro' && v) detach.push(p.name);
+    }
+  }
+  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields, values, detach, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
 }
 
 async function preview() {

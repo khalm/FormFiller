@@ -5,7 +5,7 @@
 import { openPdf, pdfjsLib, PDFLib } from './pdf.js';
 import { t } from './i18n.js';
 
-const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull } = PDFLib;
+const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull, TextAlignment } = PDFLib;
 const TEXTISH = new Set(['text', 'multiline', 'select']);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -133,10 +133,13 @@ export async function buildPdf(o) {
   let bytes = changed ? await doc.saveDocument() : srcBytes.slice(0);
   await task.destroy();
 
-  const needLib = flatToDraw.length || o.flatten || o.mode === 'form';
+  const detach = o.detach || [];
+  const needLib = flatToDraw.length || o.flatten || o.mode === 'form' || detach.length;
   if (!needLib) return { bytes, warnings: [...warnings] };
 
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
+  // form fields that sit under a merged box are removed so the merged text is visible
+  for (const name of detach) detachField(pdf, name);
   const helv = await pdf.embedFont(StandardFonts.Helvetica);
   const safe = (s) => [...s].map((c) => {
     if (c === '\n') return c;
@@ -182,7 +185,8 @@ export async function buildPdf(o) {
       let size = Math.max(6, Math.min(11, r.h * (f.line ? 0.75 : 0.68)));
       while (size > 6 && helv.widthOfTextAtSize(one, size) > r.w - 4) size -= 0.25;
       const base = f.line ? r.y + r.h - Math.max(2.5, r.h * 0.18) : r.y + r.h / 2 + size * 0.34;
-      page.drawText(one, { ...at(r.x + 2, base), size, font: helv, color, rotate: degrees(rot) });
+      const tx = f.center ? r.x + Math.max(0, (r.w - helv.widthOfTextAtSize(one, size)) / 2) : r.x + 2;
+      page.drawText(one, { ...at(tx, base), size, font: helv, color, rotate: degrees(rot) });
     } else {
       let size = Math.min(11, Math.max(7, r.h / 3));
       let lines;
@@ -230,7 +234,7 @@ export async function buildPdf(o) {
 
 async function fixAutoSizedMultiline(bytes, fields, values, color) {
   const str = (v) => (typeof v === 'string' ? v : (v && typeof v === 'object' && typeof v.text === 'string' ? v.text : ''));
-  const targets = fields.filter((f) => f.source === 'acro' && (f.type === 'multiline' || f.type === 'text' || (color && f.type === 'select')) && !f.comb && (str(values[f.id]).trim() || (f.type === 'select' && values[f.id])));
+  const targets = fields.filter((f) => f.source === 'acro' && (f.type === 'multiline' || f.type === 'text' || (color && f.type === 'select')) && !f.comb && (str(values[f.id]).trim() || (f.type === 'select' && values[f.id]) || f.center));
   if (!targets.length) return bytes;
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const form = pdf.getForm();
@@ -260,6 +264,7 @@ async function fixAutoSizedMultiline(bytes, fields, values, color) {
       }
       if (lines * size * 1.16 <= h - 3) break;
     }
+    if (f.center) { try { tf.setAlignment(TextAlignment.Center); touched = true; } catch {} }
     const fix = (getDA, setDA) => {
       const da = getDA();
       if (!da) return;
@@ -285,6 +290,20 @@ function detachField(pdf, name) {
     const form = pdf.getForm();
     const field = form.getField(name);
     const widgets = field.acroField.getWidgets();
+    // keep the box visible: redraw its border/background as plain page content
+    for (const w of widgets) {
+      try {
+        const ref = pdf.context.getObjectRef(w.dict);
+        const page = pdf.getPages().find((pg) => (pg.node.Annots()?.asArray() || []).some((a) => a === ref));
+        if (!page) continue;
+        const r = w.getRectangle();
+        const mk = w.getAppearanceCharacteristics();
+        const toRgb = (c) => (c && c.length === 3 ? rgb(c[0], c[1], c[2]) : c && c.length === 1 ? rgb(c[0], c[0], c[0]) : undefined);
+        const bc = toRgb(mk?.getBorderColor()), bg = toRgb(mk?.getBackgroundColor());
+        const bw = w.getBorderStyle()?.getWidth() ?? 1;
+        if (bc || bg) page.drawRectangle({ x: r.x + bw / 2, y: r.y + bw / 2, width: r.width - bw, height: r.height - bw, color: bg, borderColor: bc, borderWidth: bc ? bw : 0 });
+      } catch {}
+    }
     for (const page of pdf.getPages()) {
       for (const w of widgets) {
         const ref = pdf.context.getObjectRef(w.dict);

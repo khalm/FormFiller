@@ -1,6 +1,16 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    mergeBoxes: 'Merge boxes',
+    selectHint: 'tap the boxes to join.',
+    selectedN: '{n} selected',
+    merge: 'Merge',
+    merged: 'Boxes merged',
+    onlyTextMerge: 'Only text boxes can be merged',
+    samePageMerge: 'Boxes must be on the same page',
+    perBox: 'One letter per box',
+    oneText: 'One text',
+    split: 'Split',
     textColor: 'Text colour',
     customColor: 'Custom colour',
     colorProtected: 'This PDF is protected, so its form fields keep their own text colour.',
@@ -117,6 +127,16 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    mergeBoxes: 'Slå sammen bokser',
+    selectHint: 'trykk på boksene som skal slås sammen.',
+    selectedN: '{n} valgt',
+    merge: 'Slå sammen',
+    merged: 'Boksene er slått sammen',
+    onlyTextMerge: 'Bare tekstbokser kan slås sammen',
+    samePageMerge: 'Boksene må være på samme side',
+    perBox: 'Ett tegn per boks',
+    oneText: 'Én tekst',
+    split: 'Del opp',
     textColor: 'Tekstfarge',
     customColor: 'Egen farge',
     colorProtected: 'PDF-en er beskyttet, så skjemafeltene beholder sin egen tekstfarge.',
