@@ -1,6 +1,8 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    typeHere: 'Type here',
+    typedOver: 'New text',
     pipette: 'Pick a colour from the page',
     pipetteHint: 'Touch the page where the colour is',
     colorPicked: 'Colour picked',
@@ -149,6 +151,8 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    typeHere: 'Skriv her',
+    typedOver: 'Ny tekst',
     pipette: 'Hent farge fra siden',
     pipetteHint: 'Trykk på siden der fargen er',
     colorPicked: 'Farge valgt',

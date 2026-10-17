@@ -1,7 +1,7 @@
 import { VERSION } from './version.js';
 import { t, getLang, setLang, applyStatic } from './i18n.js';
 import { openPdf, pdfjsLib } from './pdf.js';
-import { getSegments, readAcroFields, labelAcroFields, detectFlatFields, finishFlatFields, sortFields, wordBoxes } from './detect.js';
+import { getSegments, readAcroFields, labelAcroFields, detectFlatFields, finishFlatFields, sortFields, wordBoxes, toViewportRect, textWidth } from './detect.js';
 import { buildPdf, hasValue, parseDateToIso, formatDate } from './fill.js';
 import { markLines, normalizeKind, MARK_STYLES } from './marks.js';
 
@@ -147,7 +147,8 @@ function boot() {
   $('#coverCustom').addEventListener('input', (e) => setCoverColor(e.target.value));
   $('#pipetteBtn').addEventListener('click', () => setPipette(!S.pipette));
   updateCoverUi();
-  $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); });
+  $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); updateTypeHere(); });
+  $('#markType').addEventListener('click', typeOverLastMark);
   $('#markDone').addEventListener('click', () => setMarkMode(null));
   $('#selCancel').addEventListener('click', () => setSelectMode(false));
   $('#selMerge').addEventListener('click', mergeSelected);
@@ -200,7 +201,7 @@ async function loadBytes(bytes, name) {
   const head = new TextDecoder('latin1').decode(bytes.subarray(0, 1024));
   if (!head.includes('%PDF')) { busy(false); toast(t('notPdf'), 'warn'); return; }
   if (S.task) { try { await S.task.destroy(); } catch {} }
-  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentId: null, customCount: 0, addMode: null, zoom: 1, editor: null, marks: [], marking: null });
+  Object.assign(S, { bytes, fileName: name || 'document.pdf', password: undefined, task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {}, currentId: null, customCount: 0, addMode: null, zoom: 1, editor: null, marks: [], marking: null, annots: [] });
 
   const task = openPdf(bytes);
   task.onPassword = async (update, reason) => {
@@ -228,6 +229,17 @@ async function loadBytes(bytes, name) {
     S.pages.push({ index: i, page, viewport: page.getViewport({ scale: 1 }) });
   }
   for (const pg of S.pages) S.segsByPage[pg.index] = await getSegments(pg.page, pg.viewport).catch(() => []);
+  // things other apps added on top of the page (typed text, drawings, stamps)
+  for (const pg of S.pages) {
+    const anns = await pg.page.getAnnotations({ intent: 'display' }).catch(() => []);
+    for (const a of anns) {
+      if (['Widget', 'Link', 'Popup'].includes(a.subtype) || !a.rect) continue;
+      const v = toViewportRect(pg.viewport, a.rect);
+      const text = a.contentsObj?.str || (Array.isArray(a.textContent) ? a.textContent.join('\n') : '') || '';
+      S.annots.push({ id: a.id, page: pg.index, subtype: a.subtype, text, lines: Math.max(1, text.split('\n').length),
+        rect: { x: Math.min(v[0], v[2]), y: Math.min(v[1], v[3]), w: Math.abs(v[2] - v[0]), h: Math.abs(v[3] - v[1]) } });
+    }
+  }
   let fields = await readAcroFields(doc, S.pages).catch((e) => { console.warn(e); return []; });
   labelAcroFields(fields, S.segsByPage);
   if (S.encrypted) {
@@ -903,6 +915,22 @@ let warnedErase = false;
 function maybeWarnErase() {
   if (!warnedErase && ['cover', 'blur', 'scribble', 'hatch'].includes(S.markStyle)) { warnedErase = true; toast(t('whiteoutNote'), '', 6500); }
 }
+function updateTypeHere() { const b = $('#markType'); if (b) b.disabled = !S.marks.length; }
+function typeOverLastMark() {
+  const m = S.marks[S.marks.length - 1];
+  if (!m) return;
+  setMarkMode(false);
+  S.customCount++;
+  const rect = { x: m.rect.x, y: m.rect.y, w: Math.max(m.rect.w, 30), h: Math.max(m.rect.h, 12) };
+  const f = finishFlatFields([{ type: rect.h > 28 ? 'multiline' : 'text', rect, page: m.page, label: t('typedOver') }])[0];
+  f.custom = true;
+  S.fields.push(f);
+  sortFields(S.fields);
+  S.values[f.id] = '';
+  for (const b of boxesOf(f)) addBox(f, b);
+  updateHeader(); scheduleDraft();
+  activate(f, {});
+}
 function setMarkMode(on) {
   S.marking = !!on;
   if (on) {
@@ -913,17 +941,36 @@ function setMarkMode(on) {
   }
   if (!on) { S.pipette = false; hideLoupe(); }
   $('#markMode').hidden = !on;
+  updateTypeHere();
   $('#markBtn').classList.toggle('on', !!on);
   $$('.overlay').forEach((o) => o.classList.toggle('marking', !!on));
 }
 function textLinesIn(page, r) {
   return (S.segsByPage[page] || []).filter((s) => s.kind === 'text' && s.x2 > r.x && s.x1 < r.x + r.w && s.y2 > r.y && s.y1 < r.y + r.h);
 }
+const overlaps = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function annotsIn(page, r) { return S.annots.filter((a) => a.page === page && overlaps(a.rect, r)); }
+// erase something another app added: strike styles get one line per text line, others cover it all
+function markAnnot(a) {
+  if (S.markStyle.startsWith('strike')) {
+    const lh = a.rect.h / a.lines;
+    const lines = a.text ? a.text.split('\n') : [];
+    for (let i = 0; i < a.lines; i++) {
+      // stop the line where the text ends (the box is often wider than the text)
+      const w = lines[i] ? Math.min(a.rect.w, textWidth(lines[i], lh * 0.8) + 4) : a.rect.w;
+      if (lines.length && !lines[i]?.trim()) continue;
+      addMark(a.page, { x: a.rect.x, y: a.rect.y + i * lh + lh * 0.12, w, h: lh * 0.8 }, true, [a.id]);
+    }
+    renderMarks(); scheduleDraft();
+  } else addMark(a.page, a.rect, false, [a.id]);
+}
 function markTap(page, p) {
   // tapping an existing mark removes it
   let hit = -1;
   S.marks.forEach((m, i) => { if (m.page === page && p.x >= m.rect.x - 2 && p.x <= m.rect.x + m.rect.w + 2 && p.y >= m.rect.y - 2 && p.y <= m.rect.y + m.rect.h + 2) hit = i; });
   if (hit >= 0) { S.marks.splice(hit, 1); renderMarks(); scheduleDraft(); return; }
+  const an = S.annots.find((a) => a.page === page && p.x >= a.rect.x - 2 && p.x <= a.rect.x + a.rect.w + 2 && p.y >= a.rect.y - 2 && p.y <= a.rect.y + a.rect.h + 2);
+  if (an) { markAnnot(an); return; }
   const seg = (S.segsByPage[page] || []).find((s) => s.kind === 'text' && p.x >= s.x1 - 2 && p.x <= s.x2 + 2 && p.y >= s.y1 - 2 && p.y <= s.y2 + 2);
   if (!seg) { toast(t('markHint')); return; }
   const words = wordBoxes(seg);
@@ -931,6 +978,8 @@ function markTap(page, p) {
   addMark(page, { x: w.x1, y: w.y1, w: w.x2 - w.x1, h: w.y2 - w.y1 });
 }
 function markArea(page, r) {
+  const touched = annotsIn(page, r);
+  if (S.markStyle.startsWith('strike') && touched.length && !textLinesIn(page, r).length) { touched.forEach(markAnnot); return; }
   // line styles follow the text lines inside the dragged area
   if (S.markStyle.startsWith('strike')) {
     const lines = textLinesIn(page, r);
@@ -946,6 +995,7 @@ function markArea(page, r) {
   // other styles: grow the area so any words it touches are fully covered
   const lines = textLinesIn(page, r).filter((s) => Math.min(s.y2, r.y + r.h) - Math.max(s.y1, r.y) > (s.y2 - s.y1) * 0.2);
   let x1 = r.x, y1 = r.y, x2 = r.x + r.w, y2 = r.y + r.h;
+  for (const a of touched) { x1 = Math.min(x1, a.rect.x); y1 = Math.min(y1, a.rect.y); x2 = Math.max(x2, a.rect.x + a.rect.w); y2 = Math.max(y2, a.rect.y + a.rect.h); }
   for (const s of lines) {
     for (const wb of wordBoxes(s)) {
       if (wb.x2 < r.x || wb.x1 > r.x + r.w) continue;
@@ -970,14 +1020,17 @@ function updateCoverUi() {
   if (!preset && /^#/.test(S.coverColor)) { $('#coverCustom').value = S.coverColor; $('.cc-pick').style.background = S.coverColor; }
   else $('.cc-pick').style.background = '';
 }
-function addMark(page, rect, quiet) {
+function addMark(page, rect, quiet, annotIds) {
   const kind = S.markStyle;
   const pad = kind === 'cover' || kind === 'blur' ? 1 : 0;
   const r = { x: rect.x - pad, y: rect.y - pad, w: rect.w + pad * 2, h: rect.h + pad * 2 };
-  const mark = { kind, page, rect: r, seed: Math.floor(Math.random() * 1e6) + 1 };
+  // added-on-top items under this mark get merged into the page when saving, so the mark can cover them
+  const annots = annotIds || annotsIn(page, r).map((a) => a.id);
+  const mark = { kind, page, rect: r, seed: Math.floor(Math.random() * 1e6) + 1, annots };
   if (kind === 'cover') mark.color = S.coverColor && S.coverColor !== 'auto' ? S.coverColor : backgroundAround(page, r);
   S.marks.push(mark);
   if (!quiet) { renderMarks(); scheduleDraft(); }
+  updateTypeHere();
 }
 // The colour of the page right around an area (the most common colour on a ring just
 // outside it), so the cover blends in with coloured or grey backgrounds.

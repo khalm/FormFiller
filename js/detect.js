@@ -634,3 +634,8 @@ export function wordBoxes(seg) {
   });
   return out.map((b) => ({ ...b, y1: seg.y1, y2: seg.y2 }));
 }
+
+// Approximate width of a string in a Helvetica-like font at the given size.
+export function textWidth(str, size) {
+  return [...str].reduce((a, c) => a + charW(c), 0) * size;
+}

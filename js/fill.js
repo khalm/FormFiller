@@ -6,7 +6,7 @@ import { openPdf, pdfjsLib, PDFLib } from './pdf.js';
 import { t } from './i18n.js';
 import { markLines } from './marks.js';
 
-const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull, TextAlignment, LineCapStyle } = PDFLib;
+const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull, TextAlignment, LineCapStyle, PDFName, PDFDict, PDFStream, PDFArray, PDFNumber, pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject } = PDFLib;
 const TEXTISH = new Set(['text', 'multiline', 'select']);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
@@ -144,6 +144,15 @@ export async function buildPdf(o) {
   // form fields that sit under a merged box are removed so the merged text is visible
   for (const name of detach) detachField(pdf, name);
   // whiteout / strike-out go on first, so new text can be written on top of a whiteout
+  // text/drawings other apps placed on top of the page are merged into the page first,
+  // otherwise they would stay on top of the erase marks
+  const done = new Set();
+  for (const m of marks) for (const id of m.annots || []) {
+    const key = m.page + ':' + id;
+    if (done.has(key)) continue;
+    done.add(key);
+    flattenAnnotation(pdf, m.page, id);
+  }
   for (const m of marks) {
     const page = pdf.getPage(m.page);
     const vp = viewports[m.page];
@@ -347,4 +356,46 @@ function plugXrefGaps(pdf) {
     const ref = PDFRef.of(n, 0);
     if (!ctx.indirectObjects.has(ref)) ctx.assign(ref, PDFNull);
   }
+}
+
+function flattenAnnotation(pdf, pageIndex, id) {
+  try {
+    const mm = /^(\d+)R(\d*)$/.exec(id);
+    if (!mm) return;
+    const ref = PDFRef.of(+mm[1], +(mm[2] || 0));
+    const page = pdf.getPage(pageIndex);
+    const dict = pdf.context.lookup(ref);
+    if (!(dict instanceof PDFDict)) return;
+    const flags = dict.lookup(PDFName.of('F'));
+    const hidden = flags instanceof PDFNumber && (flags.asNumber() & 2);
+    const ap = dict.lookup(PDFName.of('AP'));
+    if (!hidden && ap instanceof PDFDict) {
+      let nRef = ap.get(PDFName.of('N'));
+      let n = pdf.context.lookup(nRef);
+      if (n instanceof PDFDict && !(n instanceof PDFStream)) { // appearance states
+        const as = dict.get(PDFName.of('AS'));
+        nRef = as ? n.get(as) : undefined;
+        n = nRef ? pdf.context.lookup(nRef) : undefined;
+      }
+      if (n instanceof PDFStream) {
+        if (!(nRef instanceof PDFRef)) nRef = pdf.context.register(n);
+        const rect = dict.lookup(PDFName.of('Rect'), PDFArray).asRectangle();
+        const bbA = n.dict.lookup(PDFName.of('BBox'));
+        const bb = bbA instanceof PDFArray ? bbA.asRectangle() : rect;
+        const mtx = n.dict.lookup(PDFName.of('Matrix'));
+        const M = mtx instanceof PDFArray ? mtx.asArray().map((v) => v.asNumber()) : [1, 0, 0, 1, 0, 0];
+        // the appearance's box after its own matrix, mapped onto the annotation rectangle
+        const pts = [[bb.x, bb.y], [bb.x + bb.width, bb.y], [bb.x, bb.y + bb.height], [bb.x + bb.width, bb.y + bb.height]]
+          .map(([x, y]) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]]);
+        const tx1 = Math.min(...pts.map((p) => p[0])), tx2 = Math.max(...pts.map((p) => p[0]));
+        const ty1 = Math.min(...pts.map((p) => p[1])), ty2 = Math.max(...pts.map((p) => p[1]));
+        const sx = rect.width / ((tx2 - tx1) || 1), sy = rect.height / ((ty2 - ty1) || 1);
+        const name = page.node.newXObject('FlatAnnot', nRef);
+        page.pushOperators(pushGraphicsState(), concatTransformationMatrix(sx, 0, 0, sy, rect.x - tx1 * sx, rect.y - ty1 * sy), drawObject(name), popGraphicsState());
+      }
+    }
+    const popup = dict.get(PDFName.of('Popup'));
+    if (popup instanceof PDFRef) page.node.removeAnnot(popup);
+    page.node.removeAnnot(ref);
+  } catch (e) { console.warn('could not flatten annotation', id, e); }
 }
