@@ -6,6 +6,7 @@ import { openPdf, pdfjsLib, PDFLib } from './pdf.js';
 import { t } from './i18n.js';
 
 const { PDFDocument, StandardFonts, degrees, rgb, PDFRef, PDFNull } = PDFLib;
+const TEXTISH = new Set(['text', 'multiline', 'select']);
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 export function formatDate(iso, fmt) {
@@ -75,7 +76,7 @@ export async function buildPdf(o) {
   // Multi-line fields with "auto" font size get one giant line from most generators.
   // Give them a fixed size that makes the text fit before the appearance is generated.
   let srcBytes = o.bytes;
-  if (!o.encrypted) srcBytes = await fixAutoSizedMultiline(o.bytes, fields, values).catch(() => o.bytes);
+  if (!o.encrypted) srcBytes = await fixAutoSizedMultiline(o.bytes, fields, values, o.color).catch(() => o.bytes);
   const task = openPdf(srcBytes, o.password);
   const doc = await task.promise;
   const storage = doc.annotationStorage;
@@ -117,12 +118,13 @@ export async function buildPdf(o) {
       const fontSize = f.type === 'checkbox' ? Math.max(7, Math.min(rect[3] - rect[1], 14)) : Math.max(7, Math.min(11, (rect[3] - rect[1]) * 0.7));
       storage.setValue('pdfjs_internal_editor_' + (900000 + k++), {
         annotationType: pdfjsLib.AnnotationEditorType.FREETEXT,
-        color: [0, 0, 0], fontSize, value: text, pageIndex: f.page,
+        color: (o.color || [0, 0, 0]).map((c) => Math.round(c * 255)), fontSize, value: text, pageIndex: f.page,
         rect, rotation: vp.rotation || 0, id: null, structTreeParentId: null,
       });
       changed = true;
     }
     if (o.flatten || o.mode === 'form') warnings.add(t('encryptedNote'));
+    if (o.color && fields.some((f) => f.source === 'acro' && TEXTISH.has(f.type) && hasValue(f, values[f.id]))) warnings.add(t('colorProtected'));
     const out = changed ? await doc.saveDocument() : srcBytes.slice(0);
     await task.destroy();
     return { bytes: out, warnings: [...warnings] };
@@ -168,12 +170,12 @@ export async function buildPdf(o) {
       // a vector check mark (no font needed, looks the same in every viewer)
       const sz = Math.min(r.w, r.h) * 0.9;
       const ox = r.x + (r.w - sz) / 2, oy = r.y + (r.h - sz) / 2;
-      page.drawSvgPath('M 0.14 0.55 L 0.40 0.80 L 0.88 0.18', { ...at(ox, oy), scale: sz, borderColor: rgb(0.05, 0.05, 0.12), borderWidth: Math.max(0.12, 0.13), rotate: degrees(rot) });
+      page.drawSvgPath('M 0.14 0.55 L 0.40 0.80 L 0.88 0.18', { ...at(ox, oy), scale: sz, borderColor: o.color ? rgb(...o.color) : rgb(0.05, 0.05, 0.12), borderWidth: Math.max(0.12, 0.13), rotate: degrees(rot) });
       continue;
     }
     const text = safe(textOf(f, v));
     if (!text.trim()) continue;
-    const color = rgb(0.05, 0.07, 0.16);
+    const color = o.color ? rgb(...o.color) : rgb(0.05, 0.07, 0.16);
     const multi = f.type === 'multiline' || (r.h >= 30 && text.length * 5 > r.w);
     if (!multi) {
       const one = text.replace(/\s*\n\s*/g, ', ');
@@ -226,18 +228,20 @@ export async function buildPdf(o) {
   return { bytes: out, warnings: [...warnings] };
 }
 
-async function fixAutoSizedMultiline(bytes, fields, values) {
-  const targets = fields.filter((f) => f.source === 'acro' && (f.type === 'multiline' || f.type === 'text') && !f.comb && typeof values[f.id] === 'string' && values[f.id].trim());
+async function fixAutoSizedMultiline(bytes, fields, values, color) {
+  const str = (v) => (typeof v === 'string' ? v : (v && typeof v === 'object' && typeof v.text === 'string' ? v.text : ''));
+  const targets = fields.filter((f) => f.source === 'acro' && (f.type === 'multiline' || f.type === 'text' || (color && f.type === 'select')) && !f.comb && (str(values[f.id]).trim() || (f.type === 'select' && values[f.id])));
   if (!targets.length) return bytes;
   const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   const form = pdf.getForm();
   const helv = await pdf.embedFont(StandardFonts.Helvetica);
   const width = (s, size) => { try { return helv.widthOfTextAtSize(s, size); } catch { return s.length * size * 0.55; } };
+  const colorOp = color ? ` ${color.map((c) => +c.toFixed(3)).join(' ')} rg` : '';
   let touched = false;
   for (const f of targets) {
     let tf;
-    try { tf = form.getTextField(f.name); } catch { continue; }
-    const text = values[f.id];
+    try { tf = f.type === 'select' ? form.getDropdown(f.name) : form.getTextField(f.name); } catch { continue; }
+    const text = f.type === 'select' ? '' : str(values[f.id]);
     const { w, h } = f.widgets[0].rect;
     let size = 12;
     if (f.type === 'text') {
@@ -262,7 +266,11 @@ async function fixAutoSizedMultiline(bytes, fields, values) {
       const m = /(-?[\d.]+)\s+Tf/.exec(da);
       const cur = m ? Number(m[1]) : NaN;
       // only touch "auto" sizes (multi-line) or sizes too big for the text to fit
-      if (m && ((cur === 0 && f.type === 'multiline') || (cur > 0 && cur > size + 0.4))) { setDA(da.replace(m[0], `${Math.round(size * 2) / 2} Tf`)); touched = true; }
+      let nd = da;
+      if (f.type !== 'select' && m && ((cur === 0 && f.type === 'multiline') || (cur > 0 && cur > size + 0.4))) nd = nd.replace(m[0], `${Math.round(size * 2) / 2} Tf`);
+      // the user's chosen ink colour replaces the field's own text colour
+      if (colorOp) nd = nd.replace(/(^|\s)[-\d.]+\s+g(?=\s|$)|(^|\s)[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+rg(?=\s|$)|(^|\s)[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+[-\d.]+\s+k(?=\s|$)/g, ' ').trim() + colorOp;
+      if (nd !== da) { setDA(nd); touched = true; }
     };
     fix(() => tf.acroField.getDefaultAppearance(), (d) => tf.acroField.setDefaultAppearance(d));
     for (const wd of tf.acroField.getWidgets()) fix(() => wd.getDefaultAppearance(), (d) => wd.setDefaultAppearance(d));

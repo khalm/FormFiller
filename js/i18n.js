@@ -1,6 +1,10 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    textColor: 'Text colour',
+    customColor: 'Custom colour',
+    colorProtected: 'This PDF is protected, so its form fields keep their own text colour.',
+    inkBlack: 'Black', inkBlue: 'Blue', inkNavy: 'Dark blue', inkRed: 'Red', inkGreen: 'Green',
     tabPdf: 'Fill in PDF',
     tabList: 'List',
     zoomIn: 'Zoom in',
@@ -113,6 +117,10 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    textColor: 'Tekstfarge',
+    customColor: 'Egen farge',
+    colorProtected: 'PDF-en er beskyttet, så skjemafeltene beholder sin egen tekstfarge.',
+    inkBlack: 'Svart', inkBlue: 'Blå', inkNavy: 'Mørkeblå', inkRed: 'Rød', inkGreen: 'Grønn',
     tabPdf: 'Fyll i PDF',
     tabList: 'Liste',
     zoomIn: 'Zoom inn',

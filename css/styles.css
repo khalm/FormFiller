@@ -182,7 +182,7 @@ body.kb #fill { height: 100dvh; }
   position: absolute; border: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 2px; cursor: text;
   display: flex; align-items: center; overflow: hidden; color: #0f1e52;
-  font-family: Helvetica, Arial, sans-serif; line-height: 1.15; white-space: pre; transition: background .15s, border-color .15s;
+  font-family: Helvetica, Arial, sans-serif; line-height: 1.15; white-space: pre; transition: background .15s, border-color .15s; color: var(--ink-color, #0f1e52);
 }
 .ov.check { cursor: pointer; justify-content: center; font-weight: 700; }
 .ov.filled { border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: color-mix(in srgb, var(--ok) 6%, transparent); }
@@ -196,7 +196,7 @@ body.kb #fill { height: 100dvh; }
 .ov.flat.current .grip, .ov.flat.current .handle { display: block; }
 .ov-editor {
   position: absolute; z-index: 4; margin: 0; border: 0; outline: none; resize: none;
-  background: rgba(255,255,255,.92); color: #0b1440; caret-color: var(--accent);
+  background: rgba(255,255,255,.92); color: var(--ink-color, #0b1440); caret-color: var(--accent);
   font-family: Helvetica, Arial, sans-serif; line-height: 1.15; padding: 0 calc(var(--k) * 2px); border-radius: 2px;
   box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px color-mix(in srgb, var(--accent) 25%, transparent);
 }
@@ -405,3 +405,17 @@ dialog[open] { animation: pop .2s ease; }
   #docCount, .doc-sub .dot { display: none; }
   .docbar .btn.small { padding: 7px 10px; }
 }
+
+/* text colour picker */
+.ink-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--ink-color, #0f1e52); box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--line-2); }
+.ink-pop {
+  position: absolute; right: 12px; top: 56px; z-index: 7; width: 236px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 12px; box-shadow: var(--shadow-l);
+}
+.ink-title { font-weight: 650; font-size: 14px; margin-bottom: 10px; }
+.ink-swatches { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.swatch { aspect-ratio: 1; border-radius: 50%; border: 0; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); position: relative; }
+.swatch.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+.swatch-name { display: block; font-size: 11px; color: var(--muted); text-align: center; margin-top: 2px; }
+.ink-custom { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 14px; cursor: pointer; color: var(--ink-2); }
+.ink-custom input { width: 34px; height: 30px; border: 1px solid var(--line-2); border-radius: 8px; padding: 2px; background: var(--bg); cursor: pointer; }

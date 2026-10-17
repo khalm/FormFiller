@@ -84,7 +84,13 @@
         <button class="tool zoom-label" id="zoomLabel" data-i18n-aria="zoomFit">100%</button>
         <button class="tool" id="zoomIn" data-i18n-aria="zoomIn"><svg viewBox="0 0 24 24"><path d="M12 6v12M6 12h12"/></svg></button>
         <span class="tool-sep"></span>
+        <button class="tool" id="inkBtn" data-i18n-aria="textColor"><span class="ink-dot" id="inkDot"></span></button>
         <button class="tool" id="addBtn" data-i18n-aria="addField"><svg viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="10" rx="2"/><path d="M12 10v4M10 12h4"/></svg></button>
+      </div>
+      <div class="ink-pop" id="inkPop" hidden>
+        <div class="ink-title" data-i18n="textColor"></div>
+        <div class="ink-swatches" id="inkSwatches"></div>
+        <label class="ink-custom"><input type="color" id="inkCustom"><span data-i18n="customColor"></span></label>
       </div>
       <div class="add-mode" id="addMode" hidden>
         <span data-i18n="addHint"></span>

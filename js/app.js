@@ -33,7 +33,7 @@ const S = {
   bytes: null, fileName: '', password: undefined, encrypted: false,
   task: null, doc: null, pages: [], segsByPage: [], fields: [], values: {},
   currentId: null, addMode: null, fingerprint: '', loaded: false, customCount: 0,
-  zoom: 1, pageEls: [], editor: null, tab: 'pdf',
+  zoom: 1, pageEls: [], editor: null, tab: 'pdf', ink: null,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -135,6 +135,7 @@ function boot() {
 
   setupStage();
   setupSignatureDialog();
+  setupInk();
   window.addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 4), { passive: true });
   window.addEventListener('popstate', () => { if (S.loaded && !$('#fill').hidden) goHome(true); });
   let lastW = innerWidth;
@@ -745,6 +746,33 @@ function setAddMode(mode) {
   if (mode) closeEditor();
 }
 
+// ------------------------------------------------------------------ text colour
+const INKS = [['#000000', 'inkBlack'], ['#1a3fbf', 'inkBlue'], ['#0b1f66', 'inkNavy'], ['#c4161c', 'inkRed'], ['#137a3a', 'inkGreen']];
+const hexToRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+function setupInk() {
+  S.ink = store.get('ff:ink', null);
+  const box = $('#inkSwatches');
+  for (const [hex, key] of INKS) {
+    box.append(el('div', {}, el('button', { class: 'swatch', type: 'button', style: `background:${hex}`, dataset: { hex }, title: t(key), 'aria-label': t(key), onclick: () => setInk(hex) }), el('span', { class: 'swatch-name', 'data-i18n': key, text: t(key) })));
+  }
+  $('#inkCustom').addEventListener('input', (e) => setInk(e.target.value));
+  $('#inkBtn').addEventListener('click', (e) => { e.stopPropagation(); $('#inkPop').hidden = !$('#inkPop').hidden; if (!$('#inkPop').hidden) setAddMode(null); });
+  document.addEventListener('pointerdown', (e) => { if (!$('#inkPop').hidden && !e.target.closest('#inkPop, #inkBtn')) $('#inkPop').hidden = true; });
+  applyInk();
+}
+function setInk(hex) {
+  S.ink = hex;
+  store.set('ff:ink', hex);
+  applyInk();
+}
+function applyInk() {
+  const hex = S.ink || '#0f1e52';
+  $('#pagesBox').style.setProperty('--ink-color', hex);
+  $('#inkDot').style.setProperty('--ink-color', hex);
+  $('#inkCustom').value = S.ink || '#000000';
+  $$('.swatch').forEach((b) => b.classList.toggle('on', b.dataset.hex === S.ink));
+}
+
 // ------------------------------------------------------------------ signatures
 let sigPad = null, sigField = null;
 function setupSignatureDialog() {
@@ -1013,7 +1041,7 @@ function rememberAnswers() {
 // ------------------------------------------------------------------ build / preview / save
 const formPages = () => new Set(S.fields.flatMap((f) => (f.widgets.length ? f.widgets.map((w) => w.page) : [f.page])));
 function build(mode = 'all', flatten = false) {
-  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields: S.fields, values: S.values, viewports: S.pages.map((p) => p.viewport), mode, flatten });
+  return buildPdf({ bytes: S.bytes, password: S.password, encrypted: S.encrypted, fields: S.fields, values: S.values, viewports: S.pages.map((p) => p.viewport), mode, flatten, color: S.ink ? hexToRgb(S.ink) : null });
 }
 
 async function preview() {
