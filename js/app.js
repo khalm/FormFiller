@@ -145,6 +145,7 @@ function boot() {
   S.coverColor = store.get('ff:coverColor', 'auto');
   $$('[data-cover]').forEach((b) => b.addEventListener('click', () => setCoverColor(b.dataset.cover)));
   $('#coverCustom').addEventListener('input', (e) => setCoverColor(e.target.value));
+  $('#pipetteBtn').addEventListener('click', () => setPipette(!S.pipette));
   updateCoverUi();
   $('#markUndo').addEventListener('click', () => { S.marks.pop(); renderMarks(); scheduleDraft(); });
   $('#markDone').addEventListener('click', () => setMarkMode(null));
@@ -707,13 +708,20 @@ function setupStage() {
     activate(f, { tap: true, opt: node.dataset.opt || null });
   });
   // whiteout / strike-out: tap a word or drag an area
-  let mk = null;
+  let mk = null, fingers = 0;
+  cancelGesture = () => { if (mk) { mk.draft.remove(); mk = null; } hideLoupe(); };
+  stage.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') fingers++; }, true);
+  const lift = (e) => { if (e.pointerType === 'touch') fingers = Math.max(0, fingers - 1); };
+  stage.addEventListener('pointerup', lift, true);
+  stage.addEventListener('pointercancel', lift, true);
   stage.addEventListener('pointerdown', (e) => {
     if (!S.marking) return;
+    if (fingers > 1) { cancelGesture(); return; }
     const ov = e.target.closest('.overlay');
     if (!ov) return;
     const pe = S.pageEls[+ov.dataset.page];
     e.preventDefault();
+    if (S.pipette) { ov.setPointerCapture(e.pointerId); mk = { pipette: true, pe, id: e.pointerId, draft: { remove() {} } }; showLoupe(pe, e); return; }
     ov.setPointerCapture(e.pointerId);
     const draft = el('div', { class: 'mk-draft' });
     pe.overlay.append(draft);
@@ -721,6 +729,8 @@ function setupStage() {
   });
   stage.addEventListener('pointermove', (e) => {
     if (!mk || mk.id !== e.pointerId) return;
+    if (fingers > 1) { cancelGesture(); return; }
+    if (mk.pipette) { showLoupe(mk.pe, e); return; }
     mk.p1 = ptOn(mk.pe, e);
     const vp = S.pages[mk.pe.index].viewport;
     place(mk.draft, normRect(mk.p0, mk.p1), vp);
@@ -729,7 +739,13 @@ function setupStage() {
     if (!mk || (e && mk.id !== e.pointerId)) return;
     const m = mk; mk = null;
     m.draft.remove();
-    if (e && e.type === 'pointercancel') return;
+    if (e && e.type === 'pointercancel') { hideLoupe(); return; }
+    if (m.pipette) {
+      const c = sampleColor(m.pe, e);
+      hideLoupe();
+      if (c) { setCoverColor(c); S.pipette = false; updateCoverUi(); toast(t('colorPicked')); }
+      return;
+    }
     const r = normRect(m.p0, m.p1);
     const page = m.pe.index;
     if (r.w < 4 && r.h < 4) markTap(page, m.p1);
@@ -767,17 +783,25 @@ function setupStage() {
   stage.addEventListener('pointercancel', endDrag);
 
   // two-finger pinch zoom
+  // two fingers: pinch to zoom and move to pan — works in every mode
   let pinch = null;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
   stage.addEventListener('touchstart', (e) => {
-    if (e.touches.length === 2) pinch = { d: dist(e.touches[0], e.touches[1]), z: S.zoom };
+    if (e.touches.length >= 2) {
+      cancelGesture();
+      const [a, b] = e.touches;
+      pinch = { d: dist(a, b), z: S.zoom, m: mid(a, b) };
+    }
   }, { passive: true });
   stage.addEventListener('touchmove', (e) => {
-    if (!pinch || e.touches.length !== 2) return;
+    if (!pinch || e.touches.length < 2) return;
     e.preventDefault();
     const [a, b] = e.touches;
-    const z = pinch.z * (dist(a, b) / pinch.d);
-    setZoom(z, { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+    const m = mid(a, b);
+    setZoom(pinch.z * (dist(a, b) / pinch.d), m);
+    stage.scrollBy(pinch.m.x - m.x, pinch.m.y - m.y);
+    pinch.m = m;
   }, { passive: false });
   stage.addEventListener('touchend', (e) => { if (e.touches.length < 2) pinch = null; });
   // ctrl/⌘ + wheel zoom on desktop
@@ -839,6 +863,40 @@ function toggleKeyboard(f) {
   updateEditBar();
 }
 
+let cancelGesture = () => {};
+
+// ------------------------------------------------------------------ pipette (pick a colour from the page)
+function sampleColor(pe, e) {
+  const c = pe.canvas;
+  if (!c || !c.width || !pe.scale) return null;
+  const r = pe.overlay.getBoundingClientRect();
+  const vp = S.pages[pe.index].viewport;
+  const px = Math.round(((e.clientX - r.left) / r.width) * vp.width * pe.scale);
+  const py = Math.round(((e.clientY - r.top) / r.height) * vp.height * pe.scale);
+  const x0 = Math.max(0, Math.min(c.width - 3, px - 1)), y0 = Math.max(0, Math.min(c.height - 3, py - 1));
+  const d = c.getContext('2d', { willReadFrequently: true }).getImageData(x0, y0, 3, 3).data;
+  let R = 0, G = 0, B = 0;
+  for (let i = 0; i < d.length; i += 4) { R += d[i]; G += d[i + 1]; B += d[i + 2]; }
+  const hx = (v) => Math.round(v / 9).toString(16).padStart(2, '0');
+  return '#' + hx(R) + hx(G) + hx(B);
+}
+function showLoupe(pe, e) {
+  let l = $('#loupe');
+  if (!l) { l = el('div', { id: 'loupe', class: 'loupe' }, el('span')); document.body.append(l); }
+  const c = sampleColor(pe, e) || '#ffffff';
+  l.style.background = c;
+  l.firstChild.textContent = c.toUpperCase();
+  l.style.left = e.clientX + 'px';
+  l.style.top = e.clientY + 'px';
+  l.hidden = false;
+}
+function hideLoupe() { const l = $('#loupe'); if (l) l.hidden = true; }
+function setPipette(on) {
+  S.pipette = on;
+  updateCoverUi();
+  if (on) toast(t('pipetteHint'));
+}
+
 // ------------------------------------------------------------------ erase (strike out, scribble, hatch, blur, cover)
 const normRect = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x), h: Math.abs(a.y - b.y) });
 let warnedErase = false;
@@ -853,6 +911,7 @@ function setMarkMode(on) {
     $('#inkPop').hidden = true;
     maybeWarnErase();
   }
+  if (!on) { S.pipette = false; hideLoupe(); }
   $('#markMode').hidden = !on;
   $('#markBtn').classList.toggle('on', !!on);
   $$('.overlay').forEach((o) => o.classList.toggle('marking', !!on));
@@ -901,7 +960,10 @@ function setCoverColor(c) {
   updateCoverUi();
 }
 function updateCoverUi() {
+  if (S.markStyle !== 'cover') S.pipette = false;
   $('#coverColors').hidden = S.markStyle !== 'cover';
+  $('#pipetteBtn').classList.toggle('on', !!S.pipette);
+  $$('.overlay').forEach((o) => o.classList.toggle('picking', !!S.pipette));
   const preset = $$('[data-cover]').some((b) => b.dataset.cover === S.coverColor);
   $$('[data-cover]').forEach((b) => b.classList.toggle('on', b.dataset.cover === S.coverColor));
   $('.cc-pick').classList.toggle('on', !preset);

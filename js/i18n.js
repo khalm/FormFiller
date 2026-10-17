@@ -1,6 +1,9 @@
 // Simple two-language dictionary. Language is auto-detected and can be switched in the header.
 const dict = {
   en: {
+    pipette: 'Pick a colour from the page',
+    pipetteHint: 'Touch the page where the colour is',
+    colorPicked: 'Colour picked',
     coverAuto: 'Auto (page colour)',
     colWhite: 'White', colGrey: 'Light grey', colBlack: 'Black', colYellow: 'Yellow',
     erase: 'Erase',
@@ -146,6 +149,9 @@ const dict = {
     offlineReady: 'Ready to work offline',
   },
   nb: {
+    pipette: 'Hent farge fra siden',
+    pipetteHint: 'Trykk på siden der fargen er',
+    colorPicked: 'Farge valgt',
     coverAuto: 'Auto (sidens farge)',
     colWhite: 'Hvit', colGrey: 'Lys grå', colBlack: 'Svart', colYellow: 'Gul',
     erase: 'Visk ut',

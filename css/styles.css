@@ -456,3 +456,14 @@ dialog[open] { animation: pop .2s ease; }
 .cc-chip.on, .cc-sw.on, .cc-pick.on { outline: 3px solid var(--accent); outline-offset: 2px; }
 .cc-pick { position: relative; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; cursor: pointer; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); border: 2px solid color-mix(in srgb, var(--bg) 40%, transparent); }
 .cc-pick input { position: absolute; inset: -6px; width: 40px; height: 40px; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+
+.cc-pipette { width: 32px; height: 32px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--bg) 40%, transparent); background: transparent; color: inherit; display: grid; place-items: center; cursor: pointer; padding: 0; }
+.cc-pipette svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.cc-pipette.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.overlay.picking { cursor: crosshair; }
+.loupe {
+  position: fixed; z-index: 90; width: 64px; height: 64px; border-radius: 50%; pointer-events: none;
+  transform: translate(-50%, calc(-100% - 34px)); border: 4px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.3);
+  display: grid; place-items: end center;
+}
+.loupe span { font: 600 10px/1 ui-monospace, monospace; background: rgba(0,0,0,.65); color: #fff; padding: 2px 4px; border-radius: 4px; margin-bottom: -22px; }

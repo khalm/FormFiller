@@ -8,6 +8,8 @@ Fill out any PDF form — free, private, and right in your browser.
 2. FormFiller finds the boxes and shows you the PDF. Tap a box — the keyboard opens and you type straight into the PDF. Use **‹ ›** to jump from box to box.
 3. Save — either the **entire PDF** or **only the pages with the form**.
 
+Pinch with two fingers to zoom and move two fingers to pan — this works in every mode.
+
 Prefer a simple list of questions instead? Switch to the **List** tab.
 
 ## What it can do
@@ -15,7 +17,7 @@ Prefer a simple list of questions instead? Switch to the **List** tab.
 - **Fillable PDFs** (with real form fields): text, multi-line, checkboxes, radio buttons, dropdowns, lists and date fields. Labels are taken from the field's tooltip or the text printed next to / above / under the field.
 - **Printed-style PDFs** (no real fields): finds blank lines, underscores (`Name: ______`), empty boxes, table cells, checkbox squares and `Label:` blanks automatically. Drag the blue dots on a box to move or resize it, tap ＋ to add a box, or remove ones you don't need.
 - **Merge boxes**: select several boxes and join them, either as one text spanning them all or one letter per box (great for number boxes).
-- **Erase** existing text: tap a word or drag over an area, then pick a style — strike out (1, 2 or 3 lines), scribble, hatching, blur, or cover up (automatic page colour, presets or any colour). The original text is still inside the file, so don't use it to hide secrets.
+- **Erase** existing text: tap a word or drag over an area, then pick a style — strike out (1, 2 or 3 lines), scribble, hatching, blur, or cover up (automatic page colour, presets, any colour or a pipette that picks a colour from the page). The original text is still inside the file, so don't use it to hide secrets.
 - **Signatures**: draw with your finger, or type instead.
 - **Save options**: entire PDF or only the form pages, optionally **locked** (flattened) so answers can't be changed.
 - **Password-protected and owner-protected PDFs** are supported.
